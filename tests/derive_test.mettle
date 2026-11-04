@@ -1,0 +1,113 @@
+// @codec_derive: struct mapping to MessagePack and JSON.
+import "codec/codec";
+import "codec/derive";
+import "tutil";
+import "std/mem";
+
+@codec_derive struct Point {
+  x: int32;
+  y: int32;
+}
+
+@codec_derive struct Node {
+  v: int32;
+  next: Node*;
+}
+
+@codec_derive struct Shape {
+  name: string;
+  id: uint64;
+  small: int8;
+  scale: float64;
+  ratio: float32;
+  visible: bool;
+  origin: Point;
+  next: Point*;
+  tags: CodecList<string>;
+  points: CodecList<Point>;
+  rgb: uint8[3];
+}
+
+fn main() -> int32 {
+  var s: Shape;
+  s.name = "box";
+  s.id = 0xffffffffffffffff;
+  s.small = (int8)-5;
+  s.scale = 0.1;
+  s.ratio = (float32)2.5;
+  s.visible = true;
+  s.origin.x = 3;
+  s.origin.y = -4;
+  var nx: Point;
+  nx.x = 9;
+  s.next = &nx;
+  codec_list_push(&s.tags, "a");
+  codec_list_push(&s.tags, "b");
+  codec_list_push(&s.points, s.origin);
+  s.rgb[0] = (uint8)255;
+  s.rgb[2] = (uint8)1;
+
+  var b: CodecBuf;
+  codec_buf_init(&b, 64);
+  Shape_mp_write(&s, &b);
+  t_ok("write ok", b.err == CODEC_OK);
+  t_eq("valid msgpack", (int64)codec_mp_check(b.data, b.len, CODEC_MP_DEPTH), 0);
+  var r: CodecReader;
+  codec_rd_init(&r, b.data, b.len);
+  var back: Shape;
+  t_ok("read", Shape_mp_read(&back, &r) && codec_rd_done(&r));
+  t_ok("fields", back.name == "box" && back.id == 0xffffffffffffffff && back.small == -5);
+  t_ok("floats", back.scale == 0.1 && back.ratio == (float32)2.5 && back.visible);
+  t_ok("nested", back.origin.x == 3 && back.origin.y == -4 && back.next != 0 && back.next->x == 9);
+  t_ok("lists", back.tags.len == 2 && back.tags.data[1] == "b" && back.points.len == 1 && back.points.data[0].y == -4);
+  t_ok("array", back.rgb[0] == 255 && back.rgb[1] == 0 && back.rgb[2] == 1);
+
+  // Keys in another order, an unknown key, and a missing key.
+  var c: CodecBuf;
+  codec_buf_init(&c, 64);
+  codec_mp_map(&c, 3);
+  codec_mp_str(&c, "y");
+  codec_mp_int(&c, 2);
+  codec_mp_str(&c, "zzz");
+  codec_mp_array(&c, 2);
+  codec_mp_nil(&c);
+  codec_mp_str(&c, "deep");
+  codec_mp_str(&c, "x");
+  codec_mp_int(&c, 1);
+  codec_rd_init(&r, c.data, c.len);
+  var p: Point;
+  t_ok("any order", Point_mp_read(&p, &r) && p.x == 1 && p.y == 2);
+
+  // Out of range for the field type.
+  codec_buf_clear(&c);
+  codec_mp_map(&c, 1);
+  codec_mp_str(&c, "x");
+  codec_mp_int(&c, 5000000000);
+  codec_rd_init(&r, c.data, c.len);
+  t_ok("range", !Point_mp_read(&p, &r) && r.err == CODEC_ERR_TYPE);
+
+  // A self-referencing pointer chain deeper than the limit fails cleanly.
+  codec_buf_clear(&c);
+  for i in 0..600 {
+    codec_mp_map(&c, 1);
+    codec_mp_str(&c, "next");
+  }
+  codec_mp_nil(&c);
+  codec_rd_init(&r, c.data, c.len);
+  var head: Node;
+  t_ok("depth limit", !Node_mp_read(&head, &r) && r.err == CODEC_ERR_DEPTH);
+
+  // JSON.
+  var jb: CodecBuf;
+  codec_buf_init(&jb, 64);
+  var w: CodecJson;
+  codec_json_init(&w, &jb);
+  Point_json_write(&s.origin, &w);
+  t_ok("json point", codec_json_finish(&w) == CODEC_OK && codec_buf_view(&jb) == "{{\"x\":3,\"y\":-4}");
+  codec_buf_clear(&jb);
+  codec_json_init(&w, &jb);
+  Shape_json_write(&s, &w);
+  t_ok("json shape", codec_json_finish(&w) == CODEC_OK);
+  t_ok("json text", codec_buf_view(&jb) == "{{\"name\":\"box\",\"id\":18446744073709551615,\"small\":-5,\"scale\":0.1,\"ratio\":2.5,\"visible\":true,\"origin\":{{\"x\":3,\"y\":-4},\"next\":{{\"x\":9,\"y\":0},\"tags\":[\"a\",\"b\"],\"points\":[{{\"x\":3,\"y\":-4}],\"rgb\":[255,0,1]}");
+  return t_done("derive");
+}
