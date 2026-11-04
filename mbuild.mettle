@@ -12,6 +12,7 @@ fn project() {
   mb_import_root("src");
   mb_bin("codec_protoc", "tools/protoc/main.mettle");
   mb_bin("floatdump", "tools/floatdump/main.mettle");
+  mb_bin("codec_bench", "bench/main.mettle");
 }
 
 fn deps() {

@@ -64,7 +64,7 @@ export fn codec_rd_init_string(r: CodecReader*, s: string) {
 }
 
 // The next n bytes as a string view into the input (no copy).
-export fn codec_rd_string(r: CodecReader*, n: int64) -> string {
+@inline export fn codec_rd_string(r: CodecReader*, n: int64) -> string {
   var s: string;
   var p: uint8* = codec_rd_take(r, n);
   if (p != 0) {

@@ -24,7 +24,7 @@ export fn codec_list_reserve<T>(l: CodecList<T>*, need: int64) -> bool {
 }
 
 // Appends v. Returns false when memory runs out.
-export fn codec_list_push<T>(l: CodecList<T>*, v: T) -> bool {
+@inline export fn codec_list_push<T>(l: CodecList<T>*, v: T) -> bool {
   if (l->len == l->cap) {
     if (!codec_list_reserve(l, l->len + 1)) { return false; }
   }

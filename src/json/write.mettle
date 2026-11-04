@@ -198,8 +198,32 @@ fn codec_utf8_decode(s: uint8*, len: int64) -> int32 {
   return ((c & 0x07) << 18) | (((int32)s[1] & 0x3f) << 12) | (((int32)s[2] & 0x3f) << 6) | ((int32)s[3] & 0x3f);
 }
 
+// The common case: a short string with nothing to escape, copied in one go.
+// Returns false (writing nothing) if the string needs the full path.
+@inline fn codec_json_quoted_plain(w: CodecJson*, s: uint8*, n: int64) -> bool {
+  if (n > 256) { return false; }
+  var i: int64 = 0;
+  while (i + 8 <= n) {
+    if (codec_json_word_special(codec_get_le64(s + i))) { return false; }
+    i = i + 8;
+  }
+  while (i < n) {
+    var c: int32 = (int32)s[i];
+    if (c < 0x20 || c == 34 || c == 92 || c >= 0x80 || (c == 47 && (w->flags & CODEC_JSON_ESCAPE_SLASH) != 0)) { return false; }
+    i = i + 1;
+  }
+  var p: uint8* = codec_buf_reserve(w->out, n + 2);
+  if (p == 0) { return true; }
+  p[0] = (uint8)34;
+  memcpy(p + 1, s, n);
+  p[n + 1] = (uint8)34;
+  w->out->len = w->out->len + n + 2;
+  return true;
+}
+
 // Writes s as a quoted, escaped JSON string.
 fn codec_json_quoted(w: CodecJson*, s: uint8*, n: int64) {
+  if (codec_json_quoted_plain(w, s, n)) { return; }
   var b: CodecBuf* = w->out;
   codec_buf_byte(b, (uint8)34);
   var run: int64 = 0;     // start of the bytes not yet copied

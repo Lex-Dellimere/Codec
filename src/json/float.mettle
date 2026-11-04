@@ -13,14 +13,14 @@ struct CodecDiyFp {
   e: int32;
 }
 
-fn codec_diy(f: uint64, e: int32) -> CodecDiyFp {
+@inline fn codec_diy(f: uint64, e: int32) -> CodecDiyFp {
   var d: CodecDiyFp;
   d.f = f;
   d.e = e;
   return d;
 }
 
-fn codec_clz64(x: uint64) -> int32 {
+@inline fn codec_clz64(x: uint64) -> int32 {
   var n: int32 = 0;
   if ((x >> 32) == 0) { n = n + 32; x = x << 32; }
   if ((x >> 48) == 0) { n = n + 16; x = x << 16; }
@@ -31,13 +31,13 @@ fn codec_clz64(x: uint64) -> int32 {
   return n;
 }
 
-fn codec_diy_norm(d: CodecDiyFp) -> CodecDiyFp {
+@inline fn codec_diy_norm(d: CodecDiyFp) -> CodecDiyFp {
   var s: int32 = codec_clz64(d.f);
   return codec_diy(d.f << (uint64)s, d.e - s);
 }
 
 // The upper 64 bits of the 128-bit product, rounded.
-fn codec_diy_mul(x: CodecDiyFp, y: CodecDiyFp) -> CodecDiyFp {
+@inline fn codec_diy_mul(x: CodecDiyFp, y: CodecDiyFp) -> CodecDiyFp {
   var m32: uint64 = 0xffffffff;
   var a: uint64 = x.f >> 32;
   var b: uint64 = x.f & m32;

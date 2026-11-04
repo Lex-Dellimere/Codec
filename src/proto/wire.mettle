@@ -35,54 +35,54 @@ export const CODEC_PB_MAX_FIELD = 536870911;
 }
 
 // int32 and enum: negative values are sign-extended to 10 bytes.
-export fn codec_pb_put_int32(w: CodecRev*, field: int32, v: int32) {
+@inline export fn codec_pb_put_int32(w: CodecRev*, field: int32, v: int32) {
   codec_rev_varint(w, (uint64)(int64)v);
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_int64(w: CodecRev*, field: int32, v: int64) {
+@inline export fn codec_pb_put_int64(w: CodecRev*, field: int32, v: int64) {
   codec_rev_varint(w, (uint64)v);
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_uint32(w: CodecRev*, field: int32, v: uint32) {
+@inline export fn codec_pb_put_uint32(w: CodecRev*, field: int32, v: uint32) {
   codec_rev_varint(w, (uint64)v);
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_uint64(w: CodecRev*, field: int32, v: uint64) {
+@inline export fn codec_pb_put_uint64(w: CodecRev*, field: int32, v: uint64) {
   codec_rev_varint(w, v);
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_sint32(w: CodecRev*, field: int32, v: int32) {
+@inline export fn codec_pb_put_sint32(w: CodecRev*, field: int32, v: int32) {
   codec_rev_varint(w, (uint64)codec_zigzag32(v));
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_sint64(w: CodecRev*, field: int32, v: int64) {
+@inline export fn codec_pb_put_sint64(w: CodecRev*, field: int32, v: int64) {
   codec_rev_varint(w, codec_zigzag64(v));
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_bool(w: CodecRev*, field: int32, v: bool) {
+@inline export fn codec_pb_put_bool(w: CodecRev*, field: int32, v: bool) {
   var b: uint8 = 0;
   if (v) { b = 1; }
   codec_rev_byte(w, b);
   codec_pb_put_tag(w, field, CODEC_PB_VARINT);
 }
-export fn codec_pb_put_fixed32(w: CodecRev*, field: int32, v: uint32) {
+@inline export fn codec_pb_put_fixed32(w: CodecRev*, field: int32, v: uint32) {
   codec_rev_le32(w, v);
   codec_pb_put_tag(w, field, CODEC_PB_I32);
 }
-export fn codec_pb_put_fixed64(w: CodecRev*, field: int32, v: uint64) {
+@inline export fn codec_pb_put_fixed64(w: CodecRev*, field: int32, v: uint64) {
   codec_rev_le64(w, v);
   codec_pb_put_tag(w, field, CODEC_PB_I64);
 }
-export fn codec_pb_put_float(w: CodecRev*, field: int32, v: float32) {
+@inline export fn codec_pb_put_float(w: CodecRev*, field: int32, v: float32) {
   codec_rev_le32(w, codec_f32_bits(v));
   codec_pb_put_tag(w, field, CODEC_PB_I32);
 }
-export fn codec_pb_put_double(w: CodecRev*, field: int32, v: float64) {
+@inline export fn codec_pb_put_double(w: CodecRev*, field: int32, v: float64) {
   codec_rev_le64(w, codec_f64_bits(v));
   codec_pb_put_tag(w, field, CODEC_PB_I64);
 }
 // string and bytes.
-export fn codec_pb_put_bytes(w: CodecRev*, field: int32, v: string) {
+@inline export fn codec_pb_put_bytes(w: CodecRev*, field: int32, v: string) {
   codec_rev_string(w, v);
   codec_rev_varint(w, (uint64)v.length);
   codec_pb_put_tag(w, field, CODEC_PB_LEN);
@@ -128,7 +128,7 @@ export fn codec_pb_put_packed_varint(w: CodecRev*, field: int32, v: uint64*, n: 
 
 // Reads a length prefix and points `sub` at that many bytes, then moves r
 // past them. Used for nested messages, packed fields and map entries.
-export fn codec_pb_read_sub(r: CodecReader*, sub: CodecReader*) -> bool {
+@inline export fn codec_pb_read_sub(r: CodecReader*, sub: CodecReader*) -> bool {
   var n: uint64 = codec_rd_varint(r);
   if (r->err != CODEC_OK) { return false; }
   if (n > (uint64)(r->len - r->pos)) {
@@ -141,7 +141,7 @@ export fn codec_pb_read_sub(r: CodecReader*, sub: CodecReader*) -> bool {
 }
 
 // A string or bytes value as a view into the input.
-export fn codec_pb_read_bytes(r: CodecReader*) -> string {
+@inline export fn codec_pb_read_bytes(r: CodecReader*) -> string {
   var empty: string;
   var n: uint64 = codec_rd_varint(r);
   if (r->err != CODEC_OK) { return empty; }

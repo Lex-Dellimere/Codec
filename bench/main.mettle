@@ -1,0 +1,158 @@
+// codec_bench: throughput of each format on this machine.
+//   mbuild build -r && build/linux/release/codec_bench
+import "codec/codec";
+import "codec/derive";
+import "../tests/gen/basic_pb";
+import "std/io";
+import "std/mem";
+import "std/time";
+
+@codec_derive struct BenchItem {
+  id: int64;
+  name: string;
+  price: float64;
+  active: bool;
+  tags: CodecList<string>;
+}
+
+fn report(what: string, bytes: int64, ns: int64, count: int64) {
+  var mbs: float64 = (float64)bytes / ((float64)ns / 1000000000.0) / 1048576.0;
+  var per: float64 = (float64)ns / (float64)count;
+  var mbs_i: int64 = (int64)mbs;
+  var per_i: int64 = (int64)per;
+  println("{what}: {mbs_i} MB/s, {per_i} ns per message");
+}
+
+fn sample_person(p: Person) -> Person {
+  p.name = "Ada Lovelace";
+  p.id = 1815;
+  p.email = "ada@analytical.engine";
+  for i in 0..4 {
+    var ph: Person_PhoneNumber;
+    ph.number = "+44 20 7946 0000";
+    ph.type_ = Person_PhoneType_HOME;
+    codec_list_push(&p.phones, ph);
+  }
+  for i in 0..16 { codec_list_push(&p.scores, (int32)(i * 1000)); }
+  codec_list_push(&p.tags, "mathematician");
+  codec_list_push(&p.tags, "writer");
+  p.has_height = true;
+  p.height = 1.65;
+  p.balance = -123456;
+  p.active = true;
+  return p;
+}
+
+fn main() -> int32 {
+  var rounds: int64 = 200000;
+
+  // Protobuf.
+  var blank: Person;
+  var p: Person = sample_person(blank);
+  var w: CodecRev;
+  codec_rev_init(&w, 1024);
+  var bytes: string = Person_serialize(&p, &w);
+  var size: int64 = (int64)bytes.length;
+  var t0: int64 = time_mono_ns();
+  for i in 0..rounds {
+    codec_rev_clear(&w);
+    Person_encode(&p, &w);
+  }
+  var t1: int64 = time_mono_ns();
+  report("protobuf encode ({size} B)", size * rounds, t1 - t0, rounds);
+  var copy: uint8* = (uint8*)malloc(size);
+  memcpy(copy, bytes.chars, size);
+  var in: string;
+  in.chars = copy;
+  in.length = (uint64)size;
+  var q: Person;
+  t0 = time_mono_ns();
+  for i in 0..rounds {
+    q.phones.len = 0;
+    q.scores.len = 0;
+    q.tags.len = 0;
+    Person_decode(&q, in);
+  }
+  t1 = time_mono_ns();
+  report("protobuf decode ({size} B)", size * rounds, t1 - t0, rounds);
+
+  // MessagePack through @codec_derive.
+  var item: BenchItem;
+  item.id = 123456789;
+  item.name = "widget with a fairly long name";
+  item.price = 19.99;
+  item.active = true;
+  codec_list_push(&item.tags, "red");
+  codec_list_push(&item.tags, "large");
+  codec_list_push(&item.tags, "sale");
+  var mb: CodecBuf;
+  codec_buf_init(&mb, 1024);
+  BenchItem_mp_write(&item, &mb);
+  var msize: int64 = mb.len;
+  t0 = time_mono_ns();
+  for i in 0..rounds {
+    codec_buf_clear(&mb);
+    BenchItem_mp_write(&item, &mb);
+  }
+  t1 = time_mono_ns();
+  report("msgpack encode struct ({msize} B)", msize * rounds, t1 - t0, rounds);
+  var back: BenchItem;
+  var r: CodecReader;
+  t0 = time_mono_ns();
+  for i in 0..rounds {
+    back.tags.len = 0;
+    codec_rd_init(&r, mb.data, mb.len);
+    BenchItem_mp_read(&back, &r);
+  }
+  t1 = time_mono_ns();
+  report("msgpack decode struct ({msize} B)", msize * rounds, t1 - t0, rounds);
+
+  // JSON writer: the same struct, then floats alone.
+  var jb: CodecBuf;
+  codec_buf_init(&jb, 1024);
+  var jw: CodecJson;
+  codec_json_init(&jw, &jb);
+  BenchItem_json_write(&item, &jw);
+  var jsize: int64 = jb.len;
+  t0 = time_mono_ns();
+  for i in 0..rounds {
+    codec_buf_clear(&jb);
+    codec_json_init(&jw, &jb);
+    BenchItem_json_write(&item, &jw);
+  }
+  t1 = time_mono_ns();
+  report("json write struct ({jsize} B)", jsize * rounds, t1 - t0, rounds);
+
+  var nf: int64 = 2000000;
+  codec_buf_clear(&jb);
+  codec_json_init(&jw, &jb);
+  codec_json_array(&jw);
+  var x: float64 = 0.1;
+  t0 = time_mono_ns();
+  for i in 0..nf {
+    codec_json_float(&jw, x);
+    x = x * 1.0000001 + 3.7;
+  }
+  t1 = time_mono_ns();
+  var fns: int64 = (t1 - t0) / nf;
+  println("json floats: {fns} ns per float64");
+
+  var long: CodecBuf;
+  codec_buf_init(&long, 1 << 20);
+  for i in 0..(1 << 20) {
+    var c: uint8 = (uint8)(97 + i % 26);
+    if (i % 100 == 0) { c = (uint8)34; }
+    codec_buf_byte(&long, c);
+  }
+  var text: string = codec_buf_view(&long);
+  var srounds: int64 = 200;
+  t0 = time_mono_ns();
+  for i in 0..srounds {
+    codec_buf_clear(&jb);
+    codec_json_init(&jw, &jb);
+    codec_json_string(&jw, text);
+  }
+  t1 = time_mono_ns();
+  report("json escape 1 MiB string", (int64)text.length * srounds, t1 - t0, srounds);
+  return 0;
+}

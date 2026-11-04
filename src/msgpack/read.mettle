@@ -183,6 +183,15 @@ export fn codec_mp_read_bool(r: CodecReader*) -> bool {
 }
 
 export fn codec_mp_read_int(r: CodecReader*) -> int64 {
+  // Fast path: a fixint.
+  if (r->pos < r->len) {
+    var c: int32 = (int32)r->data[r->pos];
+    if (c < 0x80 || c >= 0xe0) {
+      r->pos = r->pos + 1;
+      if (c >= 0xe0) { return (int64)(c - 256); }
+      return (int64)c;
+    }
+  }
   var v: CodecMpValue;
   if (!codec_mp_want(r, &v, CODEC_MP_INT)) { return 0; }
   return v.i;
@@ -216,8 +225,22 @@ export fn codec_mp_read_float(r: CodecReader*) -> float64 {
 // A string as a view into the input. It is not checked for UTF-8; use
 // codec_utf8_valid_string when that matters.
 export fn codec_mp_read_str(r: CodecReader*) -> string {
-  var v: CodecMpValue;
   var empty: string;
+  // Fast path: a fixstr that is all there.
+  if (r->pos < r->len) {
+    var c: int32 = (int32)r->data[r->pos];
+    if (c >= 0xa0 && c < 0xc0) {
+      var n: int64 = (int64)(c & 31);
+      if (n < r->len - r->pos) {
+        var s: string;
+        s.chars = r->data + r->pos + 1;
+        s.length = (uint64)n;
+        r->pos = r->pos + 1 + n;
+        return s;
+      }
+    }
+  }
+  var v: CodecMpValue;
   if (!codec_mp_want(r, &v, CODEC_MP_STR)) { return empty; }
   return v.data;
 }
@@ -231,6 +254,13 @@ export fn codec_mp_read_bin(r: CodecReader*) -> string {
 
 // An array header: the number of items that follow.
 export fn codec_mp_read_array(r: CodecReader*) -> int64 {
+  if (r->pos < r->len) {
+    var c: int32 = (int32)r->data[r->pos];
+    if (c >= 0x90 && c < 0xa0 && (int64)(c & 15) < r->len - r->pos) {
+      r->pos = r->pos + 1;
+      return (int64)(c & 15);
+    }
+  }
   var v: CodecMpValue;
   if (!codec_mp_want(r, &v, CODEC_MP_ARRAY)) { return 0; }
   return v.n;
@@ -238,6 +268,13 @@ export fn codec_mp_read_array(r: CodecReader*) -> int64 {
 
 // A map header: the number of key/value pairs that follow.
 export fn codec_mp_read_map(r: CodecReader*) -> int64 {
+  if (r->pos < r->len) {
+    var c: int32 = (int32)r->data[r->pos];
+    if (c >= 0x80 && c < 0x90 && (int64)(c & 15) * 2 < r->len - r->pos) {
+      r->pos = r->pos + 1;
+      return (int64)(c & 15);
+    }
+  }
   var v: CodecMpValue;
   if (!codec_mp_want(r, &v, CODEC_MP_MAP)) { return 0; }
   return v.n;
