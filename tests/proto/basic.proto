@@ -1,0 +1,42 @@
+syntax = "proto3";
+package demo.v1;
+
+import "other.proto";
+
+// A person, with most field kinds.
+message Person {
+  string name = 1;
+  int32 id = 2;
+  string email = 3;
+  repeated PhoneNumber phones = 4;
+  enum PhoneType {
+    PHONE_TYPE_UNSPECIFIED = 0;
+    MOBILE = 1;
+    HOME = 2;
+  }
+  message PhoneNumber {
+    string number = 1;
+    PhoneType type = 2;
+  }
+  repeated int32 scores = 5;
+  map<string, int64> counts = 6;
+  oneof contact {
+    string twitter = 7;
+    Address address = 8;
+  }
+  optional double height = 9;
+  bytes avatar = 10;
+  sint64 balance = 11;
+  fixed32 flags = 12;
+  repeated string tags = 13;
+  .demo.v1.Address home = 14;
+  bool active = 15;
+  float ratio = 16;
+  map<int32, Address> places = 17;
+  int64 default = 18;
+}
+
+service Directory {
+  rpc Lookup (Person) returns (Address);
+  rpc Watch (Person) returns (stream Person);
+}

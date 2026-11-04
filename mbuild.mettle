@@ -10,8 +10,16 @@ fn project() {
   mb_meta("license", "Apache-2.0");
   mb_meta("repository", "https://github.com/Lex-Dellimere/Codec");
   mb_import_root("src");
+  mb_bin("codec_protoc", "tools/protoc/main.mettle");
   mb_bin("floatdump", "tools/floatdump/main.mettle");
 }
 
 fn deps() {
+}
+
+// gen: rebuilds the protobuf code the tests use from tests/proto/*.proto.
+fn cmd_gen(a: MbArgs*) -> int32 {
+  if (mb_mbuild("build codec_protoc") != 0) { return 1; }
+  var exe: string = mb_out("codec_protoc", mb_os(), "debug");
+  return mb_sh(exe + " -I tests/proto --out tests/gen basic.proto");
 }

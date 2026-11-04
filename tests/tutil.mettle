@@ -109,3 +109,13 @@ export fn t_field(s: string, pos: int64*, sep: int32) -> string {
   *pos = i + 1;
   return out;
 }
+
+// A copy of s in a new malloc block.
+export fn t_copy(s: string) -> string {
+  var p: uint8* = (uint8*)malloc((int64)s.length + 1);
+  memcpy(p, s.chars, (int64)s.length);
+  var out: string;
+  out.chars = p;
+  out.length = s.length;
+  return out;
+}

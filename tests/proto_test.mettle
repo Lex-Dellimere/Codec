@@ -1,0 +1,135 @@
+// Generated protobuf code: round trips, known bytes, merging, unknown
+// fields, bad input and limits. tests/gen is made by `mbuild gen`.
+import "codec/codec";
+import "gen/basic_pb";
+import "tutil";
+import "std/mem";
+
+fn sample(p: Person*) {
+  p->name = "Ada";
+  p->id = 150;
+  p->email = "ada@example.com";
+  var ph: Person_PhoneNumber;
+  ph.number = "555";
+  ph.type_ = Person_PhoneType_HOME;
+  codec_list_push(&p->phones, ph);
+  codec_list_push(&p->scores, -1);
+  codec_list_push(&p->scores, 300);
+  var ce: Person_CountsEntry;
+  ce.key = "x";
+  ce.value = (int64)5;
+  codec_list_push(&p->counts, ce);
+  p->twitter = "@ada";
+  p->contact_case = Person_FIELD_twitter;
+  p->has_height = true;
+  p->height = 0.0;
+  p->balance = -2;
+  p->flags = (uint32)7;
+  codec_list_push(&p->tags, "a");
+  codec_list_push(&p->tags, "");
+  p->active = true;
+  p->ratio = (float32)1.5;
+  p->default_ = (int64)9;
+}
+
+fn main() -> int32 {
+  var w: CodecRev;
+  codec_rev_init(&w, 0);
+
+  // Field 1 "Ada" and field 2 = 150: the classic encoding example.
+  var small: Person;
+  small.name = "Ada";
+  small.id = 150;
+  t_bytes("small", Person_serialize(&small, &w), "0a03416461109601");
+
+  var p: Person;
+  sample(&p);
+  var bytes: string = t_copy(Person_serialize(&p, &w));
+  t_ok("encode ok", w.err == CODEC_OK);
+  var q: Person;
+  t_eq("decode", (int64)Person_decode(&q, bytes), 0);
+  t_ok("name", q.name == "Ada" && q.id == 150 && q.email == "ada@example.com");
+  t_ok("phones", q.phones.len == 1 && q.phones.data[0].number == "555" && q.phones.data[0].type_ == 2);
+  t_ok("scores", q.scores.len == 2 && q.scores.data[0] == -1 && q.scores.data[1] == 300);
+  t_ok("map", q.counts.len == 1 && q.counts.data[0].key == "x" && q.counts.data[0].value == 5);
+  t_ok("oneof", q.contact_case == 7 && q.twitter == "@ada" && q.address == 0);
+  t_ok("optional zero kept", q.has_height && q.height == 0.0);
+  t_ok("scalars", q.balance == -2 && q.flags == 7 && q.active && q.ratio == (float32)1.5 && q.default_ == 9);
+  t_ok("tags", q.tags.len == 2 && q.tags.data[1].length == 0);
+  // Encoding the decoded message gives the same bytes.
+  t_ok("re-encode", Person_serialize(&q, &w) == bytes);
+
+  // Merging: a second message's fields add to repeated fields and replace scalars.
+  var extra: Person;
+  extra.id = 7;
+  codec_list_push(&extra.scores, 9);
+  var e2: string = t_copy(Person_serialize(&extra, &w));
+  t_eq("merge decode", (int64)Person_decode(&q, e2), 0);
+  t_ok("merge", q.id == 7 && q.scores.len == 3 && q.scores.data[2] == 9 && q.name == "Ada");
+
+  // Oneof: setting the other member switches the case.
+  var sw: Person;
+  var addr: Address;
+  addr.street = "Main";
+  sw.address = &addr;
+  sw.contact_case = Person_FIELD_address;
+  var e3: string = t_copy(Person_serialize(&sw, &w));
+  t_eq("oneof switch decode", (int64)Person_decode(&q, e3), 0);
+  t_ok("oneof switched", q.contact_case == 8 && q.address != 0 && q.address->street == "Main");
+
+  // Unknown fields survive a round trip: field 99 (varint) and 100 (bytes).
+  var unk: string = t_unhex("0a0141" + "98063f" + "a2060278" + "79");
+  var u: Person;
+  t_eq("unknown decode", (int64)Person_decode(&u, unk), 0);
+  t_eq("unknown kept", u._unknown.len, 2);
+  t_bytes("unknown re-encoded", Person_serialize(&u, &w), "0a014198063fa206027879");
+
+  // Packed and unpacked forms of a repeated field both decode.
+  var pk: Person;
+  t_eq("unpacked", (int64)Person_decode(&pk, t_unhex("28012802")), 0);
+  t_eq("packed", (int64)Person_decode(&pk, t_unhex("2a020304")), 0);
+  t_ok("both forms", pk.scores.len == 4 && pk.scores.data[3] == 4);
+
+  // Duplicate map keys: the last one wins.
+  var mk: Person;
+  t_eq("map dup", (int64)Person_decode(&mk, t_unhex("3205" + "0a017810" + "01" + "3205" + "0a017810" + "02")), 0);
+  t_ok("map last wins", mk.counts.len == 1 && mk.counts.data[0].value == 2);
+
+  // Bad input never crashes.
+  var bad: Person;
+  t_eq("truncated", (int64)Person_decode(&bad, t_unhex("0a05416461")), (int64)CODEC_ERR_TRUNCATED);
+  t_eq("field 0", (int64)Person_decode(&bad, t_unhex("0001")), (int64)CODEC_ERR_INVALID);
+  t_eq("wire type 7", (int64)Person_decode(&bad, t_unhex("0f01")), (int64)CODEC_ERR_INVALID);
+  t_eq("bad utf8", (int64)Person_decode(&bad, t_unhex("0a02c328")), (int64)CODEC_ERR_UTF8);
+  t_eq("stray end group", (int64)Person_decode(&bad, t_unhex("0c")), (int64)CODEC_ERR_INVALID);
+  t_eq("group never ends", (int64)Person_decode(&bad, t_unhex("0b0801")), (int64)CODEC_ERR_TRUNCATED);
+  t_eq("long varint", (int64)Person_decode(&bad, t_unhex("10ffffffffffffffffffff01")), (int64)CODEC_ERR_VARINT);
+  t_eq("sub too long", (int64)Person_decode(&bad, t_unhex("2205")), (int64)CODEC_ERR_TRUNCATED);
+  Person_free(&bad);
+
+  // Deep nesting stops at the depth limit: 200 nested groups as an unknown field.
+  var deep: CodecBuf;
+  codec_buf_init(&deep, 0);
+  for i in 0..200 { codec_buf_byte(&deep, (uint8)0xab); codec_buf_byte(&deep, (uint8)0x01); }
+  var d: Person;
+  t_eq("depth", (int64)Person_decode(&d, codec_buf_view(&deep)), (int64)CODEC_ERR_DEPTH);
+
+  // gRPC framing: 5-byte prefix, then the message.
+  var req: Person;
+  req.id = 1;
+  var framed: string = Directory_Lookup_frame_request(&req, &w);
+  t_bytes("grpc frame", framed, "00000000021001");
+  var gm: H2GrpcMessage;
+  t_eq("h2 read", (int64)h2_grpc_read(framed.chars, (int64)framed.length, H2_GRPC_DEFAULT_MAX_MESSAGE, &gm), (int64)H2_GRPC_READ_MESSAGE);
+  var got: Person;
+  t_eq("grpc read", (int64)Directory_Lookup_read_request(&gm, &got), 0);
+  t_ok("grpc value", got.id == 1);
+  t_ok("grpc path", Directory_Lookup_PATH == "/demo.v1.Directory/Lookup");
+
+  Person_free(&q);
+  Person_free(&u);
+  Person_free(&pk);
+  Person_free(&mk);
+  codec_rev_free(&w);
+  return t_done("proto");
+}

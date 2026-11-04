@@ -11,5 +11,7 @@ import "codec/msgpack/write";
 import "codec/msgpack/read";
 import "codec/json/float";
 import "codec/json/write";
+import "codec/proto/wire";
+import "codec/proto/grpc";
 
 export const CODEC_VERSION: string = "0.1.0";

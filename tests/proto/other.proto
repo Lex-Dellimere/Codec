@@ -1,0 +1,7 @@
+syntax = "proto3";
+package demo.v1;
+
+message Address {
+  string street = 1;
+  uint32 zip = 2;
+}
