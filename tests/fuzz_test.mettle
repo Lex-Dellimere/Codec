@@ -1,0 +1,333 @@
+// Fuzzing every decoder with mutated and random input. Each input is placed
+// so its last byte sits right before a page with no access, so reading even
+// one byte past the end crashes the test. A decoder may reject input, but it
+// must never crash, hang or read out of bounds, and what it accepts must
+// re-encode to something it accepts again.
+//
+// CODEC_FUZZ_ITERS sets the rounds per target (default 3000); `mbuild fuzz`
+// runs many more.
+import "codec/codec";
+import "codec/derive";
+import "codec/proto/compiler/desc";
+import "codec/proto/compiler/parse";
+import "codec/proto/compiler/resolve";
+import "gen/basic_pb";
+import "tutil";
+import "std/mem";
+import "std/env";
+import "std/osmem";
+import "std/conv";
+
+var g_rng: uint64 = 0x9e3779b97f4a7c15;
+
+fn rnd() -> uint64 {
+  g_rng = g_rng ^ (g_rng << 13);
+  g_rng = g_rng ^ (g_rng >> 7);
+  g_rng = g_rng ^ (g_rng << 17);
+  return g_rng;
+}
+
+fn below(n: int64) -> int64 {
+  if (n <= 0) { return 0; }
+  return (int64)(rnd() % (uint64)n);
+}
+
+// Guarded memory: inputs end at g_guard.
+const GUARD_SPAN = 1048576;
+var g_base: uint8* = (uint8*)0;
+var g_guard: uint8* = (uint8*)0;
+
+fn guard_init() {
+  var page: int64 = os_page_size();
+  g_base = (uint8*)os_mem_map(GUARD_SPAN + page);
+  g_guard = g_base + GUARD_SPAN;
+  os_mem_protect_noaccess((cstring)g_guard, page);
+}
+
+// Copies bytes so they end at the guard page; returns the view.
+fn guarded(p: uint8*, n: int64) -> string {
+  if (n > GUARD_SPAN) { n = GUARD_SPAN; }
+  var dst: uint8* = g_guard - n;
+  memmove(dst, p, n);
+  var s: string;
+  s.chars = dst;
+  s.length = (uint64)n;
+  return s;
+}
+
+const INTERESTING: uint8[8] = [0, 1, 0x7f, 0x80, 0xff, 0xc0, 0xdd, 0x0a];
+
+// A mutated copy of seed in buf (capacity cap). Returns its length.
+fn mutate(seed: string, buf: uint8*, cap: int64) -> int64 {
+  var n: int64 = (int64)seed.length;
+  if (n > cap) { n = cap; }
+  memcpy(buf, seed.chars, n);
+  var rounds: int64 = 1 + below(4);
+  for k in 0..rounds {
+    var op: int64 = below(6);
+    if (n == 0) { op = 2; }
+    if (op == 0) {
+      var at: int64 = below(n);
+      buf[at] = (uint8)(buf[at] ^ (uint8)(1 << (int32)below(8)));
+    } else if (op == 1) {
+      buf[below(n)] = INTERESTING[below(8)];
+    } else if (op == 2 && n < cap) {
+      var at2: int64 = below(n + 1);
+      memmove(buf + at2 + 1, buf + at2, n - at2);
+      buf[at2] = (uint8)rnd();
+      n = n + 1;
+    } else if (op == 3) {
+      var at3: int64 = below(n);
+      memmove(buf + at3, buf + at3 + 1, n - at3 - 1);
+      n = n - 1;
+    } else if (op == 4) {
+      n = below(n + 1);
+    } else {
+      buf[below(n)] = (uint8)rnd();
+    }
+  }
+  return n;
+}
+
+@codec_derive struct FzInner {
+  a: int16;
+  s: string;
+}
+
+@codec_derive struct FzOuter {
+  id: uint32;
+  name: string;
+  f: float64;
+  inner: FzInner;
+  link: FzOuter*;
+  list: CodecList<FzInner>;
+  nums: CodecList<int64>;
+}
+
+fn fz_outer_free(v: FzOuter*) {
+  if (v->link != 0) {
+    fz_outer_free(v->link);
+    free(v->link);
+  }
+  codec_list_free(&v->list);
+  codec_list_free(&v->nums);
+}
+
+fn fuzz_msgpack(iters: int64, seed: string) {
+  var buf: uint8* = (uint8*)malloc(8192);
+  var b: CodecBuf;
+  codec_buf_init(&b, 256);
+  var accepted: int64 = 0;
+  for it in 0..iters {
+    var n: int64 = 0;
+    if (it % 8 == 7) {
+      n = below(64);
+      for i in 0..n { buf[i] = (uint8)rnd(); }
+    } else {
+      n = mutate(seed, buf, 8192);
+    }
+    var in: string = guarded(buf, n);
+    var err: int32 = codec_mp_check(in.chars, n, CODEC_MP_DEPTH);
+    // Typed reads in a random order must stop cleanly.
+    var r: CodecReader;
+    codec_rd_init_string(&r, in);
+    var v: CodecMpValue;
+    var steps: int32 = 0;
+    while (r.err == CODEC_OK && !codec_rd_done(&r) && steps < 200) {
+      switch ((int32)below(6)) {
+        case 0: { codec_mp_read(&r, &v); }
+        case 1: { codec_mp_read_int(&r); }
+        case 2: { codec_mp_read_str(&r); }
+        case 3: { codec_mp_skip(&r, 8); }
+        case 4: { codec_mp_read_map(&r); }
+        default: {
+          var sec: int64 = 0;
+          var ns: int64 = 0;
+          codec_mp_read_timestamp(&r, &sec, &ns);
+        }
+      }
+      steps = steps + 1;
+    }
+    // Typed struct read; if it succeeds, writing and reading again must work.
+    var o: FzOuter;
+    codec_rd_init_string(&r, in);
+    if (FzOuter_mp_read(&o, &r)) {
+      accepted = accepted + 1;
+      codec_buf_clear(&b);
+      FzOuter_mp_write(&o, &b);
+      var o2: FzOuter;
+      var r2: CodecReader;
+      codec_rd_init(&r2, b.data, b.len);
+      t_ok("msgpack derive re-read", FzOuter_mp_read(&o2, &r2) && codec_rd_done(&r2));
+      fz_outer_free(&o2);
+    }
+    fz_outer_free(&o);
+    if (err == CODEC_OK) { accepted = accepted + 1; }
+  }
+  t_ok("msgpack accepted some", accepted > 0);
+  codec_buf_free(&b);
+  free(buf);
+}
+
+fn fuzz_proto(iters: int64, seed: string) {
+  var buf: uint8* = (uint8*)malloc(8192);
+  var w: CodecRev;
+  codec_rev_init(&w, 256);
+  var w2: CodecRev;
+  codec_rev_init(&w2, 256);
+  var accepted: int64 = 0;
+  for it in 0..iters {
+    var n: int64 = mutate(seed, buf, 8192);
+    if (it % 8 == 7) {
+      n = below(64);
+      for i in 0..n { buf[i] = (uint8)rnd(); }
+    }
+    var in: string = guarded(buf, n);
+    var p: Person;
+    if (Person_decode(&p, in) == CODEC_OK) {
+      accepted = accepted + 1;
+      // What decodes must encode, decode again and encode the same.
+      var once: string = Person_serialize(&p, &w);
+      var q: Person;
+      t_ok("proto re-decode", Person_decode(&q, once) == CODEC_OK);
+      var twice: string = Person_serialize(&q, &w2);
+      t_ok("proto stable", once == twice);
+      Person_free(&q);
+    }
+    Person_free(&p);
+  }
+  t_ok("proto accepted some", accepted > 0);
+  codec_rev_free(&w);
+  codec_rev_free(&w2);
+  free(buf);
+}
+
+fn fuzz_json(iters: int64) {
+  var buf: uint8* = (uint8*)malloc(256);
+  var b: CodecBuf;
+  codec_buf_init(&b, 256);
+  for it in 0..iters {
+    var n: int64 = below(64);
+    for i in 0..n {
+      // Mostly ASCII, some control bytes and UTF-8 pieces.
+      var x: uint64 = rnd();
+      buf[i] = (uint8)(32 + (int64)(x % 95));
+      if (x % 7 == 0) { buf[i] = (uint8)(x >> 8); }
+    }
+    var flags: int32 = (int32)below(16);
+    var in: string = guarded(buf, n);
+    codec_buf_clear(&b);
+    var w: CodecJson;
+    codec_json_init_flags(&w, &b, flags);
+    codec_json_array(&w);
+    codec_json_bytes_as_string(&w, in.chars, n);
+    codec_json_float(&w, codec_bits_f64(rnd()));
+    codec_json_float32(&w, codec_bits_f32((uint32)rnd()));
+    codec_json_int(&w, (int64)rnd());
+    codec_json_end(&w);
+    var err: int32 = codec_json_finish(&w);
+    var valid_in: bool = codec_utf8_valid(in.chars, n);
+    if ((flags & CODEC_JSON_LOSSY_UTF8) != 0 || valid_in) {
+      t_ok("json accepted", err == CODEC_OK || (err == CODEC_ERR_INVALID && (flags & CODEC_JSON_NAN_ERROR) != 0));
+    } else {
+      t_ok("json rejected bad utf8", err == CODEC_ERR_UTF8);
+    }
+    if (err == CODEC_OK) {
+      var ok: bool = codec_utf8_valid(b.data, b.len);
+      for i in 0..b.len {
+        if (b.data[i] < 32) { ok = false; }
+        if ((flags & CODEC_JSON_ASCII) != 0 && b.data[i] >= 128) { ok = false; }
+      }
+      t_ok("json output clean", ok);
+    }
+  }
+  codec_buf_free(&b);
+  free(buf);
+}
+
+fn fuzz_proto_parser(iters: int64, seed: string) {
+  var buf: uint8* = (uint8*)malloc(8192);
+  for it in 0..iters {
+    var n: int64 = mutate(seed, buf, 8192);
+    var set: CodecPbcSet;
+    var f: CodecPbcFile;
+    f.path = "fuzz.proto";
+    f.disk = "fuzz.proto";
+    f.text = guarded(buf, n);
+    codec_list_push(&set.files, f);
+    if (codec_pbc_parse(&set, 0)) {
+      codec_pbc_resolve(&set);
+    }
+    // The set's memory is left to the process; this loop only checks safety.
+  }
+  free(buf);
+}
+
+fn main() -> int32 {
+  guard_init();
+  var iters: int64 = 3000;
+  var env: string = env_get_or("CODEC_FUZZ_ITERS", "");
+  if (env.length > 0) {
+    iters = match (str_to_i64(env)) { case Ok(x): x, default: iters };
+  }
+
+  var mb: CodecBuf;
+  codec_buf_init(&mb, 256);
+  var o: FzOuter;
+  o.id = (uint32)7;
+  o.name = "outer";
+  o.f = 1.5;
+  o.inner.a = (int16)-3;
+  o.inner.s = "in";
+  var link: FzOuter;
+  link.name = "link";
+  o.link = &link;
+  codec_list_push(&o.list, o.inner);
+  codec_list_push(&o.nums, (int64)1);
+  codec_list_push(&o.nums, (int64)-100000);
+  FzOuter_mp_write(&o, &mb);
+  codec_mp_timestamp(&mb, 12345, 6789);
+  codec_mp_ext(&mb, 3, mb.data, 5);
+  fuzz_msgpack(iters, t_copy(codec_buf_view(&mb)));
+
+  var pw: CodecRev;
+  codec_rev_init(&pw, 256);
+  var p: Person;
+  p.name = "Grace";
+  p.id = 42;
+  var ph: Person_PhoneNumber;
+  ph.number = "123";
+  codec_list_push(&p.phones, ph);
+  codec_list_push(&p.scores, -7);
+  codec_list_push(&p.scores, 1 << 20);
+  var ce: Person_CountsEntry;
+  ce.key = "k";
+  ce.value = (int64)3;
+  codec_list_push(&p.counts, ce);
+  var addr: Address;
+  addr.street = "Elm";
+  p.address = &addr;
+  p.contact_case = Person_FIELD_address;
+  p.has_height = true;
+  p.height = 1.8;
+  codec_list_push(&p.tags, "t");
+  fuzz_proto(iters, t_copy(Person_serialize(&p, &pw)));
+
+  fuzz_json(iters);
+
+  println("fuzz: {iters} rounds per target");
+  var proto_text: string = t_read_file("tests/proto/basic.proto");
+  fuzz_proto_parser(iters / 4, proto_text);
+
+  // Random bytes into the varint reader.
+  var vb: uint8[16];
+  for it in 0..iters {
+    var n: int64 = below(12);
+    for i in 0..n { vb[i] = (uint8)rnd(); }
+    var in: string = guarded(&vb[0], n);
+    var r: CodecReader;
+    codec_rd_init_string(&r, in);
+    while (r.err == CODEC_OK && !codec_rd_done(&r)) { codec_rd_varint(&r); }
+  }
+  return t_done("fuzz");
+}

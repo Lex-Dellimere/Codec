@@ -43,3 +43,10 @@ fn cmd_conformance(a: MbArgs*) -> int32 {
     + "$P/build/conformance_test_runner --enforce_recommended --maximum_edition PROTO3 $G/testee 2>&1 | grep -E 'CONFORMANCE SUITE|ERROR'";
   return mb_sh(script);
 }
+
+// fuzz: a long fuzzing run in release (`mbuild fuzz 1000000` for more rounds).
+fn cmd_fuzz(a: MbArgs*) -> int32 {
+  var n: string = "200000";
+  if (mb_nargs(a) > 0) { n = mb_arg(a, 0); }
+  return mb_sh("CODEC_FUZZ_ITERS=" + n + " \"$MBUILD_EXE\" test fuzz -r --force");
+}
