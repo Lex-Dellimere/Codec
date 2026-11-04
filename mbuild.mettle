@@ -23,3 +23,23 @@ fn cmd_gen(a: MbArgs*) -> int32 {
   var exe: string = mb_out("codec_protoc", mb_os(), "debug");
   return mb_sh(exe + " -I tests/proto --out tests/gen basic.proto");
 }
+
+// conformance: runs Google's protobuf conformance suite against Codec.
+// Needs a protobuf source tree with conformance_test_runner built in it
+// (docs/conformance.md shows how). PROTOBUF_DIR points at it; the default
+// is ~/.cache/codec-conformance (with src/ and build/ inside). -r tests a
+// release build of the testee.
+fn cmd_conformance(a: MbArgs*) -> int32 {
+  if (mb_mbuild("build codec_protoc") != 0) { return 1; }
+  var exe: string = mb_out("codec_protoc", mb_os(), "debug");
+  var mode: string = "";
+  if (mb_flag(a, "-r")) { mode = " --release"; }
+  var script: string = "set -e; P=${{PROTOBUF_DIR:-$HOME/.cache/codec-conformance}; G=.mbuild/conformance; "
+    + "rm -rf $G; mkdir -p $G; "
+    + exe + " -I $P/src/conformance --out $G/c --prefix C conformance.proto; "
+    + exe + " -I $P/src/src --out $G/p3 --prefix P3 google/protobuf/test_messages_proto3.proto; "
+    + exe + " -I $P/src/src --out $G/p2 --prefix P2 google/protobuf/test_messages_proto2.proto; "
+    + "\"${{METTLE:-mettle}\" --build" + mode + " tests/conformance/testee.mettle -o $G/testee; "
+    + "$P/build/conformance_test_runner --enforce_recommended --maximum_edition PROTO3 $G/testee 2>&1 | grep -E 'CONFORMANCE SUITE|ERROR'";
+  return mb_sh(script);
+}

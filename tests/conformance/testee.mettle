@@ -1,0 +1,115 @@
+// The program Google's conformance_test_runner drives. It reads requests
+// (a 4-byte little-endian length, then a ConformanceRequest) on stdin and
+// answers each with a ConformanceResponse on stdout. Binary protobuf in and
+// out is tested; JSON and text format requests are answered "skipped".
+//
+// Built and run by `mbuild conformance`, which generates the code below
+// from the protobuf source tree first.
+import "codec/codec";
+import "../../.mbuild/conformance/c/conformance_pb";
+import "../../.mbuild/conformance/p3/google/protobuf/test_messages_proto3_pb";
+import "../../.mbuild/conformance/p2/google/protobuf/test_messages_proto2_pb";
+import "std/mem";
+
+fn read_full(p: uint8*, n: int64) -> bool {
+  var got: int64 = 0;
+  while (got < n) {
+    var k: int64 = syscall(0, 0, p + got, n - got);
+    if (k <= 0) { return false; }
+    got = got + k;
+  }
+  return true;
+}
+
+fn write_full(p: uint8*, n: int64) -> bool {
+  var done: int64 = 0;
+  while (done < n) {
+    var k: int64 = syscall(1, 1, p + done, n - done);
+    if (k <= 0) { return false; }
+    done = done + k;
+  }
+  return true;
+}
+
+fn reply(resp: CConformanceResponse*, w: CodecRev*) -> bool {
+  var body: string = CConformanceResponse_serialize(resp, w);
+  var head: uint8[4];
+  codec_put_le32(&head[0], (uint32)body.length);
+  return write_full(&head[0], 4) && write_full(body.chars, (int64)body.length);
+}
+
+fn handle(req: CConformanceRequest*, resp: CConformanceResponse*, w: CodecRev*, out: CodecRev*) {
+  if (req->message_type == "conformance.FailureSet") {
+    resp->result_case = CConformanceResponse_FIELD_protobuf_payload;
+    resp->protobuf_payload = "";
+    return;
+  }
+  if (req->payload_case != CConformanceRequest_FIELD_protobuf_payload) {
+    resp->result_case = CConformanceResponse_FIELD_skipped;
+    resp->skipped = "only binary input is supported";
+    return;
+  }
+  if (req->requested_output_format != CWireFormat_PROTOBUF) {
+    resp->result_case = CConformanceResponse_FIELD_skipped;
+    resp->skipped = "only binary output is supported";
+    return;
+  }
+  var err: int32 = 0;
+  var bytes: string;
+  if (req->message_type == "protobuf_test_messages.proto3.TestAllTypesProto3") {
+    var m3: P3TestAllTypesProto3;
+    err = P3TestAllTypesProto3_decode(&m3, req->protobuf_payload);
+    if (err == CODEC_OK) { bytes = P3TestAllTypesProto3_serialize(&m3, out); }
+    P3TestAllTypesProto3_free(&m3);
+  } else if (req->message_type == "protobuf_test_messages.proto2.TestAllTypesProto2") {
+    var m2: P2TestAllTypesProto2;
+    err = P2TestAllTypesProto2_decode(&m2, req->protobuf_payload);
+    if (err == CODEC_OK) { bytes = P2TestAllTypesProto2_serialize(&m2, out); }
+    P2TestAllTypesProto2_free(&m2);
+  } else {
+    resp->result_case = CConformanceResponse_FIELD_skipped;
+    resp->skipped = "message type not supported";
+    return;
+  }
+  if (err != CODEC_OK) {
+    resp->result_case = CConformanceResponse_FIELD_parse_error;
+    resp->parse_error = codec_error_name(err);
+    return;
+  }
+  resp->result_case = CConformanceResponse_FIELD_protobuf_payload;
+  resp->protobuf_payload = bytes;
+}
+
+fn main() -> int32 {
+  var w: CodecRev;
+  codec_rev_init(&w, 4096);
+  var out: CodecRev;
+  codec_rev_init(&out, 4096);
+  var cap: int64 = 1 << 16;
+  var buf: uint8* = (uint8*)malloc(cap);
+  while (true) {
+    var head: uint8[4];
+    if (!read_full(&head[0], 4)) { break; }
+    var n: int64 = (int64)codec_get_le32(&head[0]);
+    if (n > cap) {
+      free(buf);
+      cap = n;
+      buf = (uint8*)malloc(cap);
+    }
+    if (!read_full(buf, n)) { return 1; }
+    var data: string;
+    data.chars = buf;
+    data.length = (uint64)n;
+    var req: CConformanceRequest;
+    var resp: CConformanceResponse;
+    if (CConformanceRequest_decode(&req, data) != CODEC_OK) {
+      resp.result_case = CConformanceResponse_FIELD_runtime_error;
+      resp.runtime_error = "cannot decode the request";
+    } else {
+      handle(&req, &resp, &w, &out);
+    }
+    if (!reply(&resp, &w)) { return 1; }
+    CConformanceRequest_free(&req);
+  }
+  return 0;
+}
