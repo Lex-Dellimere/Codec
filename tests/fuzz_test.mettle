@@ -245,6 +245,37 @@ fn fuzz_json(iters: int64) {
   free(buf);
 }
 
+fn fuzz_cbor(iters: int64, seed: string) {
+  var buf: uint8* = (uint8*)malloc(8192);
+  var b: CodecBuf;
+  codec_buf_init(&b, 256);
+  for it in 0..iters {
+    var n: int64 = mutate(seed, buf, 8192);
+    if (it % 8 == 7) {
+      n = below(64);
+      for i in 0..n { buf[i] = (uint8)rnd(); }
+    }
+    var in: string = guarded(buf, n);
+    codec_cbor_check(in.chars, n, CODEC_CBOR_DEPTH);
+    var r: CodecReader;
+    codec_rd_init_string(&r, in);
+    var v: CodecCborValue;
+    var steps: int32 = 0;
+    while (r.err == CODEC_OK && !codec_rd_done(&r) && steps < 200) {
+      switch ((int32)below(5)) {
+        case 0: { codec_cbor_read(&r, &v); }
+        case 1: { codec_cbor_read_int(&r); }
+        case 2: { codec_cbor_read_text(&r); }
+        case 3: { codec_cbor_skip(&r, 8); }
+        default: { codec_cbor_read_float(&r); }
+      }
+      steps = steps + 1;
+    }
+  }
+  codec_buf_free(&b);
+  free(buf);
+}
+
 fn fuzz_proto_parser(iters: int64, seed: string) {
   var buf: uint8* = (uint8*)malloc(8192);
   for it in 0..iters {
@@ -314,6 +345,25 @@ fn main() -> int32 {
   fuzz_proto(iters, t_copy(Person_serialize(&p, &pw)));
 
   fuzz_json(iters);
+
+  var cb: CodecBuf;
+  codec_buf_init(&cb, 256);
+  codec_cbor_map(&cb, 3);
+  codec_cbor_int(&cb, 1);
+  codec_cbor_int(&cb, 2);
+  codec_cbor_int(&cb, -1);
+  codec_cbor_tag(&cb, (uint64)24);
+  codec_cbor_bytes(&cb, cb.data, 4);
+  codec_cbor_text(&cb, "key");
+  codec_cbor_begin(&cb, 4);
+  codec_cbor_float(&cb, 1.5);
+  codec_cbor_float(&cb, 0.1);
+  codec_cbor_begin(&cb, 3);
+  codec_cbor_text(&cb, "ab");
+  codec_cbor_break(&cb);
+  codec_cbor_null(&cb);
+  codec_cbor_break(&cb);
+  fuzz_cbor(iters, t_copy(codec_buf_view(&cb)));
 
   println("fuzz: {iters} rounds per target");
   var proto_text: string = t_read_file("tests/proto/basic.proto");

@@ -7,6 +7,7 @@ import "codec/core/buf";
 import "codec/core/rev";
 import "codec/core/reader";
 import "codec/core/utf8";
+import "codec/cbor/cbor";
 import "codec/msgpack/write";
 import "codec/msgpack/read";
 import "codec/json/float";
@@ -14,5 +15,6 @@ import "codec/json/write";
 import "codec/proto/wire";
 import "codec/proto/grpc";
 import "codec/core/utf8";
+import "codec/cbor/cbor";
 
 export const CODEC_VERSION: string = "0.1.0";

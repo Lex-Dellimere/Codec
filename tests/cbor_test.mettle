@@ -1,0 +1,200 @@
+// CBOR against the RFC 8949 Appendix A examples, plus errors and limits.
+import "codec/codec";
+import "tutil";
+import "std/mem";
+import "std/strbuf";
+import "std/arena";
+
+fn hex64(out: StrBuf*, bits: uint64) {
+  var digits: string = "0123456789abcdef";
+  var sh: int32 = 60;
+  while (sh >= 0) {
+    strbuf_append_byte(out, digits.chars[(int64)((bits >> (uint64)sh) & 15)]);
+    sh = sh - 4;
+  }
+}
+
+// Renders one item in the form tools/cbor_vectors.py writes.
+fn cbor_dump(r: CodecReader*, out: StrBuf*) {
+  var v: CodecCborValue;
+  if (!codec_cbor_read(r, &v)) {
+    strbuf_append_string(out, "ERR");
+    return;
+  }
+  switch (v.kind) {
+    case 1: { strbuf_append_string(out, "u"); strbuf_append_uint(out, v.u); }
+    case 2: { strbuf_append_string(out, "n"); strbuf_append_uint(out, v.u); }
+    case 3: { dump_string(r, out, &v, "b"); }
+    case 4: { dump_string(r, out, &v, "s"); }
+    case 5: { dump_items(r, out, &v, "[", "]", false); }
+    case 6: { dump_items(r, out, &v, "{{", "}", true); }
+    case 7: {
+      strbuf_append_string(out, "t");
+      strbuf_append_uint(out, v.u);
+      strbuf_append_string(out, "(");
+      cbor_dump(r, out);
+      strbuf_append_string(out, ")");
+    }
+    case 8: { strbuf_append_string(out, "x"); strbuf_append_uint(out, v.u); }
+    case 9: { strbuf_append_string(out, "false"); }
+    case 10: { strbuf_append_string(out, "true"); }
+    case 11: { strbuf_append_string(out, "null"); }
+    case 12: { strbuf_append_string(out, "undefined"); }
+    case 13: {
+      strbuf_append_string(out, "f");
+      strbuf_append_int(out, (int64)v.width);
+      strbuf_append_string(out, ":");
+      hex64(out, codec_f64_bits(v.f));
+    }
+    default: { strbuf_append_string(out, "?"); }
+  }
+}
+
+fn dump_string(r: CodecReader*, out: StrBuf*, v: CodecCborValue*, p: string) {
+  if (v->n >= 0) {
+    strbuf_append_string(out, p);
+    strbuf_append_string(out, t_hex(v->data));
+    return;
+  }
+  strbuf_append_string(out, "_" + p);
+  var c: CodecCborValue;
+  while (codec_cbor_read(r, &c) && c.kind != CODEC_CBOR_BREAK) {
+    strbuf_append_string(out, t_hex(c.data));
+  }
+}
+
+fn dump_items(r: CodecReader*, out: StrBuf*, v: CodecCborValue*, open: string, close: string, pairs: bool) {
+  if (v->n < 0) { strbuf_append_string(out, "_"); }
+  strbuf_append_string(out, open);
+  var k: int64 = 0;
+  while (v->n < 0 || k < v->n) {
+    if (v->n < 0 && r->pos < r->len && r->data[r->pos] == 0xff) {
+      r->pos = r->pos + 1;
+      break;
+    }
+    if (k > 0) { strbuf_append_string(out, ","); }
+    cbor_dump(r, out);
+    if (pairs) {
+      strbuf_append_string(out, ":");
+      cbor_dump(r, out);
+    }
+    k = k + 1;
+  }
+  strbuf_append_string(out, close);
+}
+
+// Reads one item and writes it back with the writer (preferred serialization).
+fn cbor_copy(r: CodecReader*, b: CodecBuf*) {
+  var v: CodecCborValue;
+  if (!codec_cbor_read(r, &v)) { return; }
+  switch (v.kind) {
+    case 1: { codec_cbor_uint(b, v.u); }
+    case 2: { codec_cbor_nint(b, v.u); }
+    case 3: { codec_cbor_bytes(b, v.data.chars, (int64)v.data.length); }
+    case 4: { codec_cbor_text(b, v.data); }
+    case 5: {
+      codec_cbor_array(b, v.n);
+      for i in 0..v.n { cbor_copy(r, b); }
+    }
+    case 6: {
+      codec_cbor_map(b, v.n);
+      for i in 0..v.n * 2 { cbor_copy(r, b); }
+    }
+    case 7: { codec_cbor_tag(b, v.u); cbor_copy(r, b); }
+    case 8: { codec_cbor_simple(b, (int32)v.u); }
+    case 9: { codec_cbor_bool(b, false); }
+    case 10: { codec_cbor_bool(b, true); }
+    case 11: { codec_cbor_null(b); }
+    case 12: { codec_cbor_undefined(b); }
+    case 13: { codec_cbor_float(b, v.f); }
+    default: { }
+  }
+}
+
+fn check_err(name: string, hex: string, want: int32) {
+  var data: string = t_unhex(hex);
+  t_eq(name, (int64)codec_cbor_check(data.chars, (int64)data.length, CODEC_CBOR_DEPTH), (int64)want);
+  free(data.chars);
+}
+
+fn main() -> int32 {
+  var text: string = t_read_file("tests/data/cbor_vectors.txt");
+  t_ok("vector file", text.length > 0);
+  var arena: Arena* = arena_init(0);
+  var out: StrBuf* = strbuf_new(arena, 256);
+  var b: CodecBuf;
+  codec_buf_init(&b, 64);
+  var pos: int64 = 0;
+  var cases: int64 = 0;
+  while (pos < (int64)text.length) {
+    var hex: string = t_field(text, &pos, 9);
+    var want: string = t_field(text, &pos, 9);
+    var round: string = t_field(text, &pos, 10);
+    var enc: string = t_unhex(hex);
+    t_eq("check " + hex, (int64)codec_cbor_check(enc.chars, (int64)enc.length, CODEC_CBOR_DEPTH), 0);
+    var r: CodecReader;
+    codec_rd_init_string(&r, enc);
+    out->len = 0;
+    cbor_dump(&r, out);
+    var got: string = strbuf_finish_string(out);
+    t_ok("decode " + hex + " got " + got + " want " + want, got == want && r.err == 0 && codec_rd_done(&r));
+    if (round == "1") {
+      codec_rd_init_string(&r, enc);
+      codec_buf_clear(&b);
+      cbor_copy(&r, &b);
+      t_bytes("encode " + hex, codec_buf_view(&b), hex);
+    }
+    free(enc.chars);
+    cases = cases + 1;
+  }
+  t_eq("vectors", cases, 81);
+
+  // Floats pick the shortest width that keeps the value.
+  codec_buf_clear(&b);
+  codec_cbor_float(&b, 0.1);
+  codec_cbor_float(&b, 1.5);
+  codec_cbor_float(&b, 100000.0);
+  codec_cbor_float(&b, 5.960464477539063e-8);
+  codec_cbor_float(&b, codec_bits_f64(0x7ff8000000000000));
+  t_bytes("float widths", codec_buf_view(&b), "fb3fb999999999999a" + "f93e00" + "fa47c35000" + "f90001" + "f97e00");
+
+  // Typed reads.
+  codec_buf_clear(&b);
+  codec_cbor_map(&b, 2);
+  codec_cbor_text(&b, "alg");
+  codec_cbor_int(&b, -7);
+  codec_cbor_int(&b, 1);
+  codec_cbor_bytes(&b, b.data, 3);
+  var r2: CodecReader;
+  codec_rd_init(&r2, b.data, b.len);
+  t_eq("map", codec_cbor_read_map(&r2), 2);
+  t_ok("text", codec_cbor_read_text(&r2) == "alg");
+  t_eq("int", codec_cbor_read_int(&r2), -7);
+  t_eq("int 1", codec_cbor_read_int(&r2), 1);
+  t_ok("bytes", codec_cbor_read_bytes(&r2).length == 3 && r2.err == 0 && codec_rd_done(&r2));
+
+  // Bad input.
+  check_err("reserved ai 28", "1c", CODEC_ERR_INVALID);
+  check_err("stray break", "ff", CODEC_ERR_INVALID);
+  check_err("indefinite int", "1f", CODEC_ERR_INVALID);
+  check_err("short bytes", "4401", CODEC_ERR_TRUNCATED);
+  check_err("huge array", "9bffffffffffffffff", CODEC_ERR_LIMIT);
+  check_err("bad utf8", "62c328", CODEC_ERR_UTF8);
+  check_err("wrong chunk type", "5f6161ff", CODEC_ERR_INVALID);
+  check_err("nested chunk", "5f5f4100ffff", CODEC_ERR_INVALID);
+  check_err("simple 24 below 32", "f818", CODEC_ERR_INVALID);
+  check_err("unclosed indefinite", "9f01", CODEC_ERR_TRUNCATED);
+  check_err("trailing", "0000", CODEC_ERR_INVALID);
+  check_err("tag without item", "c1", CODEC_ERR_TRUNCATED);
+
+  var deep: CodecBuf;
+  codec_buf_init(&deep, 0);
+  for i in 0..600 { codec_cbor_array(&deep, 1); }
+  codec_cbor_null(&deep);
+  t_eq("depth", (int64)codec_cbor_check(deep.data, deep.len, CODEC_CBOR_DEPTH), (int64)CODEC_ERR_DEPTH);
+  codec_buf_clear(&deep);
+  for i in 0..600 { codec_cbor_tag(&deep, (uint64)1); }
+  codec_cbor_null(&deep);
+  t_eq("tag depth", (int64)codec_cbor_check(deep.data, deep.len, CODEC_CBOR_DEPTH), (int64)CODEC_ERR_DEPTH);
+  return t_done("cbor");
+}
