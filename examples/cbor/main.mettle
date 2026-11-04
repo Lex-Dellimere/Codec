@@ -1,0 +1,46 @@
+// CBOR: a COSE_Key as WebAuthn sends it (a map with integer keys), written
+// and then read back.
+import "codec/codec";
+import "std/io";
+
+fn main() -> int32 {
+  var x: uint8[32];
+  var y: uint8[32];
+  for i in 0..32 {
+    x[i] = (uint8)i;
+    y[i] = (uint8)(255 - i);
+  }
+
+  var b: CodecBuf;
+  codec_buf_init(&b, 128);
+  codec_cbor_map(&b, 5);
+  codec_cbor_int(&b, 1);    // kty
+  codec_cbor_int(&b, 2);    //   EC2
+  codec_cbor_int(&b, 3);    // alg
+  codec_cbor_int(&b, -7);   //   ES256
+  codec_cbor_int(&b, -1);   // crv
+  codec_cbor_int(&b, 1);    //   P-256
+  codec_cbor_int(&b, -2);   // x
+  codec_cbor_bytes(&b, &x[0], 32);
+  codec_cbor_int(&b, -3);   // y
+  codec_cbor_bytes(&b, &y[0], 32);
+  println("COSE_Key: {b.len} bytes");
+
+  if (codec_cbor_check(b.data, b.len, CODEC_CBOR_DEPTH) != CODEC_OK) { return 1; }
+  var r: CodecReader;
+  codec_rd_init(&r, b.data, b.len);
+  var n: int64 = codec_cbor_read_map(&r);
+  for i in 0..n {
+    var key: int64 = codec_cbor_read_int(&r);
+    if (key == -2 || key == -3) {
+      var coord: string = codec_cbor_read_bytes(&r);
+      println("  {key}: {coord.length} bytes");
+    } else {
+      var v: int64 = codec_cbor_read_int(&r);
+      println("  {key}: {v}");
+    }
+  }
+  if (r.err != CODEC_OK) { return 1; }
+  codec_buf_free(&b);
+  return 0;
+}

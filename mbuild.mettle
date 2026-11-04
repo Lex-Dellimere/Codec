@@ -13,16 +13,21 @@ fn project() {
   mb_bin("codec_protoc", "tools/protoc/main.mettle");
   mb_bin("floatdump", "tools/floatdump/main.mettle");
   mb_bin("codec_bench", "bench/main.mettle");
+  mb_bin("example_protobuf", "examples/protobuf/main.mettle");
+  mb_bin("example_msgpack", "examples/msgpack/main.mettle");
+  mb_bin("example_json", "examples/json/main.mettle");
+  mb_bin("example_cbor", "examples/cbor/main.mettle");
 }
 
 fn deps() {
 }
 
-// gen: rebuilds the protobuf code the tests use from tests/proto/*.proto.
+// gen: rebuilds the protobuf code the tests and examples use.
 fn cmd_gen(a: MbArgs*) -> int32 {
   if (mb_mbuild("build codec_protoc") != 0) { return 1; }
   var exe: string = mb_out("codec_protoc", mb_os(), "debug");
-  return mb_sh(exe + " -I tests/proto --out tests/gen basic.proto");
+  if (mb_sh(exe + " -I tests/proto --out tests/gen basic.proto") != 0) { return 1; }
+  return mb_sh(exe + " -I examples/protobuf --out examples/protobuf greeter.proto");
 }
 
 // conformance: runs Google's protobuf conformance suite against Codec.

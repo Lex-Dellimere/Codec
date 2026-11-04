@@ -1,0 +1,46 @@
+// Protocol Buffers and gRPC framing with code made by codec_protoc.
+// greeter_pb.mettle was generated with:
+//   codec_protoc -I examples/protobuf --out examples/protobuf greeter.proto
+import "codec/codec";
+import "greeter_pb";
+import "std/io";
+
+fn main() -> int32 {
+  var w: CodecRev;
+  codec_rev_init(&w, 256);
+
+  // Build a request and frame it as one gRPC message (what a client sends
+  // in its HTTP/2 DATA frames to Greeter_SayHello_PATH).
+  var req: HelloRequest;
+  req.name = "Ada";
+  codec_list_push(&req.languages, "en");
+  codec_list_push(&req.languages, "fr");
+  var framed: string = Greeter_SayHello_frame_request(&req, &w);
+  println("POST {Greeter_SayHello_PATH}: {framed.length} bytes");
+
+  // The server side: std/http2 finds the message, Codec decodes it.
+  var msg: H2GrpcMessage;
+  if (h2_grpc_read(framed.chars, (int64)framed.length, H2_GRPC_DEFAULT_MAX_MESSAGE, &msg) != H2_GRPC_READ_MESSAGE) {
+    return 1;
+  }
+  var got: HelloRequest;
+  var err: int32 = Greeter_SayHello_read_request(&msg, &got);
+  if (err != CODEC_OK) {
+    println("bad request: {codec_error_name(err)}");
+    return 1;
+  }
+  println("hello {got.name}, in {got.languages.len} languages");
+
+  // Plain encode and decode, without gRPC.
+  var reply: HelloReply;
+  reply.message = "Hello, Ada";
+  reply.sent_at = 1762300000;
+  var bytes: string = HelloReply_serialize(&reply, &w);
+  var back: HelloReply;
+  if (HelloReply_decode(&back, bytes) != CODEC_OK) { return 1; }
+  println("{back.message} at {back.sent_at} ({bytes.length} bytes)");
+
+  HelloRequest_free(&got);
+  codec_rev_free(&w);
+  return 0;
+}

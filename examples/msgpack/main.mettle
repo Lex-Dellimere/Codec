@@ -1,0 +1,57 @@
+// MessagePack: a struct with @codec_derive, then the low-level writer and
+// reader for data with no fixed shape.
+import "codec/codec";
+import "codec/derive";
+import "std/io";
+
+@codec_derive struct Job {
+  id: uint64;
+  name: string;
+  priority: int8;
+  tags: CodecList<string>;
+}
+
+fn main() -> int32 {
+  var b: CodecBuf;
+  codec_buf_init(&b, 256);
+
+  var job: Job;
+  job.id = (uint64)42;
+  job.name = "resize images";
+  job.priority = (int8)3;
+  codec_list_push(&job.tags, "batch");
+  Job_mp_write(&job, &b);
+  println("job: {b.len} bytes");
+
+  var r: CodecReader;
+  codec_rd_init(&r, b.data, b.len);
+  var back: Job;
+  if (!Job_mp_read(&back, &r)) {
+    println("bad job: {codec_error_name(r.err)}");
+    return 1;
+  }
+  println("read back: {back.name} (id {back.id}, {back.tags.len} tag)");
+
+  // By hand: an array holding a timestamp and a map.
+  codec_buf_clear(&b);
+  codec_mp_array(&b, 2);
+  codec_mp_timestamp(&b, 1762300000, 500);
+  codec_mp_map(&b, 1);
+  codec_mp_str(&b, "ok");
+  codec_mp_bool(&b, true);
+
+  codec_rd_init(&r, b.data, b.len);
+  var n: int64 = codec_mp_read_array(&r);
+  var sec: int64 = 0;
+  var ns: int64 = 0;
+  codec_mp_read_timestamp(&r, &sec, &ns);
+  var pairs: int64 = codec_mp_read_map(&r);
+  var key: string = codec_mp_read_str(&r);
+  var ok: bool = codec_mp_read_bool(&r);
+  if (r.err != CODEC_OK) { return 1; }
+  println("{n} items: time {sec}.{ns}, {pairs} pair: {key} = {ok}");
+  codec_list_free(&back.tags);
+  codec_list_free(&job.tags);
+  codec_buf_free(&b);
+  return 0;
+}

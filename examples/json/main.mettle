@@ -1,0 +1,35 @@
+// JSON writer: a health report, written by hand and pretty-printed.
+import "codec/codec";
+import "std/io";
+
+fn main() -> int32 {
+  var b: CodecBuf;
+  codec_buf_init(&b, 512);
+  var w: CodecJson;
+  codec_json_init(&w, &b);
+  codec_json_pretty(&w, 2);
+
+  codec_json_object(&w);
+  codec_json_field_string(&w, "service", "freedrs");
+  codec_json_field_bool(&w, "healthy", true);
+  codec_json_field_float(&w, "load", 0.37);
+  codec_json_field_int(&w, "uptime_s", 86400);
+  codec_json_key(&w, "checks");
+  codec_json_array(&w);
+  codec_json_object(&w);
+  codec_json_field_string(&w, "name", "disk \"/var\"");
+  codec_json_field_float(&w, "free_ratio", 1.0 / 3.0);
+  codec_json_end(&w);
+  codec_json_end(&w);
+  codec_json_field_null(&w, "last_error");
+  codec_json_end(&w);
+
+  var err: int32 = codec_json_finish(&w);
+  if (err != CODEC_OK) {
+    println("json: {codec_error_name(err)}");
+    return 1;
+  }
+  println(codec_buf_view(&b));
+  codec_buf_free(&b);
+  return 0;
+}
