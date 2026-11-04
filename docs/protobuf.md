@@ -22,25 +22,24 @@ way protoc takes them. Every file they import is generated too. The output for
 name, which keeps two packages with the same message names apart.
 `--runtime` is the import prefix for Codec itself (default `codec`).
 
-In a project that depends on Codec, give yourself an `mbuild gen` command
-that builds the compiler in the Codec checkout and runs it. (Generate before
-the first build: your code imports the generated files.)
+The compiler is a program, so build it from a clone of this repository
+(`mbuild build -r codec_protoc` puts it in `build/linux/release/`). In a
+project that depends on Codec, an `mbuild gen` command can then run it.
+Generate before the first build, because your code imports the generated files.
 
 ```mettle
 fn deps() {
-  mb_dep_path("codec", "../codec");
+  mb_dep("codec", "v0.1.0");
 }
 
 // gen: rebuilds src/gen from proto/*.proto.
 fn cmd_gen(a: MbArgs*) -> int32 {
-  var codec: string = "../codec";
-  if (mb_sh("cd " + codec + " && \"$MBUILD_EXE\" build codec_protoc") != 0) { return 1; }
-  return mb_sh(codec + "/build/linux/debug/codec_protoc -I proto --out src/gen service.proto");
+  var protoc: string = "../codec/build/linux/release/codec_protoc";
+  return mb_sh(protoc + " -I proto --out src/gen service.proto");
 }
 ```
 
-Then `import "gen/service_pb";` (with `src` as your import root, or a path
-relative to the importing file).
+Then `import "gen/service_pb";` from `src/main.mettle`.
 
 ## What is supported
 

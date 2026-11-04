@@ -57,3 +57,19 @@ fn cmd_fuzz(a: MbArgs*) -> int32 {
   if (mb_nargs(a) > 0) { n = mb_arg(a, 0); }
   return mb_sh("CODEC_FUZZ_ITERS=" + n + " \"$MBUILD_EXE\" test fuzz -r --force");
 }
+
+// package: lays out dist/codec for the Mettle package registry
+// (website/registry.py add dist/codec, in the Mettle repository). The
+// registry wants codec.mettle at the package root, so src/ becomes the root.
+fn cmd_package(a: MbArgs*) -> int32 {
+  var v: string = mb_version();
+  var script: string = "set -e; rm -rf dist/codec; mkdir -p dist/codec/tools; "
+    + "cp -r src/. dist/codec/; cp -r docs dist/codec/docs; "
+    + "cp LICENSE NOTICE README.md dist/codec/; "
+    + "cp tools/protoc/main.mettle dist/codec/tools/protoc.mettle; "
+    + "printf 'name = codec\\nversion = " + v + "\\n"
+    + "description = Serialization: Protocol Buffers with a .proto compiler and gRPC framing, MessagePack, a JSON writer and CBOR\\n"
+    + "license = Apache-2.0\\nsource = https://github.com/Lex-Dellimere/Codec\\ncompiler = 0.18.0\\n' > dist/codec/mettle.package; "
+    + "echo dist/codec";
+  return mb_sh(script);
+}

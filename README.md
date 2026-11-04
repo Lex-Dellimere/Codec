@@ -17,12 +17,11 @@ than C++ protobuf on the benchmark message ([docs/testing.md](docs/testing.md)).
 
 ## Use it
 
-Codec is not in the package registry yet. Clone it next to your project and
-add it as a path dependency in your `mbuild.mettle`:
+In your `mbuild.mettle`:
 
 ```mettle
 fn deps() {
-  mb_dep_path("codec", "../codec");
+  mb_dep("codec", "v0.1.0");
 }
 ```
 

@@ -91,3 +91,23 @@
 @inline export fn codec_f32_bits(f: float32) -> uint32 { return *(uint32*)&f; }
 @inline export fn codec_bits_f64(b: uint64) -> float64 { return *(float64*)&b; }
 @inline export fn codec_bits_f32(b: uint32) -> float32 { return *(float32*)&b; }
+
+// Checks the registry runs with `mettle test`.
+@test fn codec_test_varint_size() -> int32 {
+  if (codec_varint_size(0) != 1 || codec_varint_size(127) != 1 || codec_varint_size(128) != 2) { return 1; }
+  if (codec_varint_size(0xffffffffffffffff) != 10) { return 2; }
+  return 0;
+}
+
+@test fn codec_test_zigzag() -> int32 {
+  if (codec_zigzag64(-1) != 1 || codec_zigzag64(1) != 2) { return 1; }
+  if (codec_unzigzag64(codec_zigzag64(-123456789)) != -123456789) { return 2; }
+  if (codec_unzigzag32(codec_zigzag32(-7)) != -7) { return 3; }
+  return 0;
+}
+
+@test fn codec_test_varint_bytes() -> int32 {
+  var buf: uint8[10];
+  if (codec_put_varint(&buf[0], (uint64)300) != 2 || buf[0] != 0xac || buf[1] != 0x02) { return 1; }
+  return 0;
+}
