@@ -1,0 +1,16 @@
+// mbuild.mettle: the project file for Codec. `mbuild help` lists its commands.
+//
+// Layout: src/codec.mettle is the facade; each format sits in src/<format>/.
+// Tests: tests/<name>_test.mettle, run with `mbuild test` and `mbuild test -r`.
+import "mbuild/api";
+
+fn project() {
+  mb_package("codec", "0.1.0");
+  mb_meta("description", "serialization in pure Mettle: Protocol Buffers with a .proto compiler and gRPC framing, MessagePack, a JSON writer and CBOR");
+  mb_meta("license", "Apache-2.0");
+  mb_meta("repository", "https://github.com/Lex-Dellimere/Codec");
+  mb_import_root("src");
+}
+
+fn deps() {
+}

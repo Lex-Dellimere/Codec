@@ -1,0 +1,207 @@
+// MessagePack against the msgpack-test-suite, plus round trips, errors and limits.
+import "codec/codec";
+import "tutil";
+import "std/mem";
+import "std/strbuf";
+import "std/arena";
+
+// Renders one decoded value in the same text form tools/msgpack_suite.py writes.
+fn mp_dump(r: CodecReader*, out: StrBuf*) {
+  var v: CodecMpValue;
+  if (!codec_mp_read(r, &v)) {
+    strbuf_append_string(out, "ERR");
+    return;
+  }
+  switch (v.kind) {
+    case 1: { strbuf_append_string(out, "nil"); }
+    case 2: {
+      if (v.b) { strbuf_append_string(out, "true"); } else { strbuf_append_string(out, "false"); }
+    }
+    case 3: { strbuf_append_int(out, v.i); }
+    case 4: { strbuf_append_uint(out, v.u); }
+    case 5: { dump_float(out, v.f); }
+    case 6: { dump_float(out, v.f); }
+    case 7: { strbuf_append_string(out, "s"); dump_hex(out, v.data); }
+    case 8: { strbuf_append_string(out, "b"); dump_hex(out, v.data); }
+    case 9: {
+      strbuf_append_string(out, "[");
+      for i in 0..v.n {
+        if (i > 0) { strbuf_append_string(out, ","); }
+        mp_dump(r, out);
+      }
+      strbuf_append_string(out, "]");
+    }
+    case 10: {
+      strbuf_append_string(out, "{{");
+      for i in 0..v.n {
+        if (i > 0) { strbuf_append_string(out, ","); }
+        mp_dump(r, out);
+        strbuf_append_string(out, ":");
+        mp_dump(r, out);
+      }
+      strbuf_append_string(out, "}");
+    }
+    case 11: {
+      var sec: int64 = 0;
+      var ns: int64 = 0;
+      if (v.ext_type == -1 && codec_mp_timestamp_of(v.data, &sec, &ns)) {
+        strbuf_append_string(out, "t");
+        strbuf_append_int(out, sec);
+        strbuf_append_string(out, ":");
+        strbuf_append_int(out, ns);
+      } else {
+        strbuf_append_string(out, "e");
+        strbuf_append_int(out, (int64)v.ext_type);
+        strbuf_append_string(out, ":");
+        dump_hex(out, v.data);
+      }
+    }
+    default: { strbuf_append_string(out, "?"); }
+  }
+}
+
+fn dump_float(out: StrBuf*, f: float64) {
+  if (f == (float64)(int64)f && f >= -9223372036854775808.0 && f < 9223372036854775808.0) {
+    strbuf_append_int(out, (int64)f);
+    return;
+  }
+  strbuf_append_string(out, "f");
+  var bits: uint64 = codec_f64_bits(f);
+  var digits: string = "0123456789abcdef";
+  var sh: int32 = 60;
+  while (sh >= 0) {
+    strbuf_append_byte(out, digits.chars[(int64)((bits >> (uint64)sh) & 15)]);
+    sh = sh - 4;
+  }
+}
+
+fn dump_hex(out: StrBuf*, s: string) {
+  var h: string = t_hex(s);
+  strbuf_append_string(out, h);
+}
+
+// Reads one value and writes it back with the writer: the canonical form.
+fn mp_copy(r: CodecReader*, b: CodecBuf*) {
+  var v: CodecMpValue;
+  if (!codec_mp_read(r, &v)) { return; }
+  switch (v.kind) {
+    case 1: { codec_mp_nil(b); }
+    case 2: { codec_mp_bool(b, v.b); }
+    case 3: { codec_mp_int(b, v.i); }
+    case 4: { codec_mp_uint(b, v.u); }
+    case 5: { codec_mp_float32(b, (float32)v.f); }
+    case 6: { codec_mp_float64(b, v.f); }
+    case 7: { codec_mp_str(b, v.data); }
+    case 8: { codec_mp_bin(b, v.data.chars, (int64)v.data.length); }
+    case 9: {
+      codec_mp_array(b, v.n);
+      for i in 0..v.n { mp_copy(r, b); }
+    }
+    case 10: {
+      codec_mp_map(b, v.n);
+      for i in 0..v.n * 2 { mp_copy(r, b); }
+    }
+    case 11: {
+      var sec: int64 = 0;
+      var ns: int64 = 0;
+      if (v.ext_type == -1 && codec_mp_timestamp_of(v.data, &sec, &ns)) {
+        codec_mp_timestamp(b, sec, ns);
+      } else {
+        codec_mp_ext(b, v.ext_type, v.data.chars, (int64)v.data.length);
+      }
+    }
+    default: { }
+  }
+}
+
+fn check_err(name: string, hex: string, want: int32) {
+  var data: string = t_unhex(hex);
+  t_eq(name, (int64)codec_mp_check(data.chars, (int64)data.length, CODEC_MP_DEPTH), (int64)want);
+  free(data.chars);
+}
+
+fn main() -> int32 {
+  var text: string = t_read_file("tests/data/msgpack_suite.txt");
+  t_ok("suite file", text.length > 0);
+  var arena: Arena* = arena_init(0);
+  var out: StrBuf* = strbuf_new(arena, 256);
+  var b: CodecBuf;
+  codec_buf_init(&b, 64);
+  var pos: int64 = 0;
+  var cases: int64 = 0;
+  while (pos < (int64)text.length) {
+    var want: string = t_field(text, &pos, 9);
+    var enc_hex: string = t_field(text, &pos, 9);
+    var canon_hex: string = t_field(text, &pos, 10);
+    var enc: string = t_unhex(enc_hex);
+    t_eq("suite check " + enc_hex, (int64)codec_mp_check(enc.chars, (int64)enc.length, CODEC_MP_DEPTH), 0);
+    var r: CodecReader;
+    codec_rd_init_string(&r, enc);
+    out->len = 0;
+    mp_dump(&r, out);
+    var got: string = strbuf_finish_string(out);
+    t_ok("suite decode " + enc_hex + " got " + got + " want " + want, got == want && r.err == 0 && codec_rd_done(&r));
+    codec_rd_init_string(&r, enc);
+    codec_buf_clear(&b);
+    mp_copy(&r, &b);
+    t_bytes("suite encode " + enc_hex, codec_buf_view(&b), canon_hex);
+    free(enc.chars);
+    cases = cases + 1;
+  }
+  t_eq("suite cases", cases, 233);
+
+  // Round trips the suite does not cover.
+  codec_buf_clear(&b);
+  codec_mp_timestamp(&b, -1, 999999999);
+  codec_mp_timestamp(&b, (int64)1 << 34, 0);
+  codec_mp_int(&b, -9223372036854775807 - 1);
+  codec_mp_uint(&b, 0xffffffffffffffff);
+  codec_mp_str(&b, "héllo");
+  var big: uint8* = (uint8*)malloc(70000);
+  mem_fill((cstring)big, 7, 70000);
+  codec_mp_bin(&b, big, 70000);
+  codec_mp_ext(&b, 5, big, 300);
+  var r2: CodecReader;
+  codec_rd_init(&r2, b.data, b.len);
+  var sec: int64 = 0;
+  var ns: int64 = 0;
+  t_ok("ts96 negative", codec_mp_read_timestamp(&r2, &sec, &ns) && sec == -1 && ns == 999999999);
+  t_ok("ts96 big", codec_mp_read_timestamp(&r2, &sec, &ns) && sec == (int64)1 << 34 && ns == 0);
+  t_ok("int64 min", codec_mp_read_int(&r2) == -9223372036854775807 - 1);
+  t_ok("uint64 max", codec_mp_read_uint(&r2) == 0xffffffffffffffff);
+  t_ok("utf8 str", codec_mp_read_str(&r2) == "héllo");
+  var bin: string = codec_mp_read_bin(&r2);
+  t_ok("bin32", bin.length == 70000 && bin.chars[69999] == 7);
+  var et: int32 = 0;
+  var ext: string = codec_mp_read_ext(&r2, &et);
+  t_ok("ext16", et == 5 && ext.length == 300 && r2.err == 0 && codec_rd_done(&r2));
+
+  // Wrong type is an error, not a crash.
+  var r3: CodecReader;
+  codec_rd_init(&r3, b.data, b.len);
+  codec_mp_read_str(&r3);
+  t_eq("type error", (int64)r3.err, (int64)CODEC_ERR_TYPE);
+
+  // Bad input.
+  check_err("unused c1", "c1", CODEC_ERR_INVALID);
+  check_err("empty", "", CODEC_ERR_TRUNCATED);
+  check_err("str8 short", "d905616263", CODEC_ERR_TRUNCATED);
+  check_err("array32 huge", "ddffffffff", CODEC_ERR_LIMIT);
+  check_err("map16 huge", "de0010", CODEC_ERR_LIMIT);
+  check_err("array missing item", "929100", CODEC_ERR_TRUNCATED);
+  check_err("trailing bytes", "c0c0", CODEC_ERR_INVALID);
+  check_err("ext32 short", "c9000000ff01", CODEC_ERR_TRUNCATED);
+
+  // Depth: 600 nested one-item arrays.
+  var deep: CodecBuf;
+  codec_buf_init(&deep, 0);
+  for i in 0..600 { codec_mp_array(&deep, 1); }
+  codec_mp_nil(&deep);
+  t_eq("depth limit", (int64)codec_mp_check(deep.data, deep.len, CODEC_MP_DEPTH), (int64)CODEC_ERR_DEPTH);
+  t_eq("depth ok", (int64)codec_mp_check(deep.data + 100, deep.len - 100, CODEC_MP_DEPTH), 0);
+  t_eq("depth small limit", (int64)codec_mp_check(deep.data + 590, deep.len - 590, 5), (int64)CODEC_ERR_DEPTH);
+  codec_buf_free(&deep);
+  codec_buf_free(&b);
+  return t_done("msgpack");
+}
+

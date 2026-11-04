@@ -1,0 +1,88 @@
+// Varints, zigzag, fixed-width, the reader's bounds checks and both buffers.
+import "codec/codec";
+import "tutil";
+import "std/mem";
+
+fn rd(hex: string) -> CodecReader {
+  var n: int64 = (int64)hex.length / 2;
+  var p: uint8* = (uint8*)malloc(n + 1);
+  for i in 0..n {
+    p[i] = (uint8)(nib(hex[i * 2]) * 16 + nib(hex[i * 2 + 1]));
+  }
+  var r: CodecReader;
+  codec_rd_init(&r, p, n);
+  return r;
+}
+
+fn nib(c: char) -> int32 {
+  var v: int32 = (int32)c;
+  if (v >= 97) { return v - 87; }
+  return v - 48;
+}
+
+fn main() -> int32 {
+  var buf: uint8[16];
+  var tests: uint64[6] = [0, 1, 127, 128, 300, 0xffffffffffffffff];
+  var sizes: int64[6] = [1, 1, 1, 2, 2, 10];
+  for i in 0..6 {
+    var n: int64 = codec_put_varint(&buf[0], tests[i]);
+    t_eq("varint size", n, sizes[i]);
+    t_eq("varint size fn", codec_varint_size(tests[i]), sizes[i]);
+    var r: CodecReader;
+    codec_rd_init(&r, &buf[0], n);
+    t_ok("varint round trip", codec_rd_varint(&r) == tests[i] && r.err == 0 && codec_rd_done(&r));
+    // The same value with plenty of bytes after it takes the fast path.
+    var r2: CodecReader;
+    codec_rd_init(&r2, &buf[0], 16);
+    t_ok("varint fast path", codec_rd_varint(&r2) == tests[i] && r2.pos == n);
+  }
+  var r3: CodecReader = rd("ac02");
+  t_eq("varint 300", (int64)codec_rd_varint(&r3), 300);
+  var r4: CodecReader = rd("8080");
+  codec_rd_varint(&r4);
+  t_eq("varint truncated", (int64)r4.err, (int64)CODEC_ERR_TRUNCATED);
+  var r5: CodecReader = rd("ffffffffffffffffff7f00000000");
+  codec_rd_varint(&r5);
+  t_eq("varint 10th byte too big", (int64)r5.err, (int64)CODEC_ERR_VARINT);
+  var r6: CodecReader = rd("ffffffffffffffffffff01");
+  codec_rd_varint(&r6);
+  t_eq("varint 11 bytes", (int64)r6.err, (int64)CODEC_ERR_VARINT);
+  var r7: CodecReader = rd("01020304");
+  t_eq("le32", (int64)codec_rd_le32(&r7), 0x04030201);
+  t_eq("le32 then past end", (int64)codec_rd_u8(&r7), 0);
+  t_eq("past end err", (int64)r7.err, (int64)CODEC_ERR_TRUNCATED);
+  var r8: CodecReader = rd("0102030405060708");
+  t_ok("be64", codec_rd_be64(&r8) == 0x0102030405060708);
+  var r9: CodecReader = rd("0102");
+  t_ok("take too much", codec_rd_take(&r9, 3) == 0 && r9.err == CODEC_ERR_TRUNCATED);
+  var r10: CodecReader = rd("0102");
+  t_ok("take negative", codec_rd_take(&r10, -1) == 0);
+
+  t_ok("zigzag -1", codec_zigzag64(-1) == 1);
+  t_ok("zigzag 1", codec_zigzag64(1) == 2);
+  t_ok("zigzag min", codec_zigzag64((int64)0x8000000000000000) == 0xffffffffffffffff);
+  t_ok("unzigzag", codec_unzigzag64(codec_zigzag64(-123456789)) == -123456789);
+  t_ok("zigzag32", codec_zigzag32(-2) == 3 && codec_unzigzag32((uint32)3) == -2);
+
+  var b: CodecBuf;
+  codec_buf_init(&b, 0);
+  for i in 0..1000 { codec_buf_byte(&b, (uint8)i); }
+  codec_buf_varint(&b, (uint64)300);
+  t_eq("buf len", b.len, 1002);
+  t_ok("buf content", b.data[999] == (uint8)(999 & 255) && b.data[1000] == 0xac);
+  codec_buf_free(&b);
+  var fixed: uint8[4];
+  codec_buf_fixed(&b, &fixed[0], 4);
+  codec_buf_string(&b, "abcde");
+  t_eq("fixed buf overflow", (int64)b.err, (int64)CODEC_ERR_LIMIT);
+
+  var w: CodecRev;
+  codec_rev_init(&w, 0);
+  for i in 0..1000 { codec_rev_byte(&w, (uint8)i); }
+  codec_rev_varint(&w, (uint64)300);
+  var v: string = codec_rev_view(&w);
+  t_eq("rev len", (int64)v.length, 1002);
+  t_ok("rev order", v.chars[0] == 0xac && v.chars[1] == 0x02 && v.chars[2] == (uint8)(999 & 255) && v.chars[1001] == 0);
+  codec_rev_free(&w);
+  return t_done("core");
+}

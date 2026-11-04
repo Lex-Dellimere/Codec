@@ -1,0 +1,13 @@
+// Codec: serialization for Mettle. Importing "codec/codec" brings in every
+// part; import a single part ("codec/msgpack/msgpack", ...) to keep builds small.
+import "codec/core/status";
+import "codec/core/list";
+import "codec/core/varint";
+import "codec/core/buf";
+import "codec/core/rev";
+import "codec/core/reader";
+import "codec/core/utf8";
+import "codec/msgpack/write";
+import "codec/msgpack/read";
+
+export const CODEC_VERSION: string = "0.1.0";

@@ -1,0 +1,111 @@
+// Small check helpers shared by the test programs.
+import "std/io";
+import "std/mem";
+import "std/file";
+
+var g_checks: int32 = 0;
+var g_fails: int32 = 0;
+
+export fn t_ok(name: string, cond: bool) {
+  g_checks = g_checks + 1;
+  if (!cond) {
+    g_fails = g_fails + 1;
+    println("FAIL {name}");
+  }
+}
+
+export fn t_eq(name: string, got: int64, want: int64) {
+  g_checks = g_checks + 1;
+  if (got != want) {
+    g_fails = g_fails + 1;
+    println("FAIL {name}: got {got}, want {want}");
+  }
+}
+
+export fn t_hex(s: string) -> string {
+  var digits: string = "0123456789abcdef";
+  var out: string = "";
+  for i in 0..s.length {
+    var b: int32 = (int32)s.chars[i];
+    out = out + str_char(digits[b >> 4]) + str_char(digits[b & 15]);
+  }
+  return out;
+}
+
+fn str_char(c: char) -> string {
+  return "{c}";
+}
+
+// Compares bytes and prints both as hex when they differ.
+export fn t_bytes(name: string, got: string, want_hex: string) {
+  var h: string = t_hex(got);
+  g_checks = g_checks + 1;
+  if (h != want_hex) {
+    g_fails = g_fails + 1;
+    println("FAIL {name}:\n  got  {h}\n  want {want_hex}");
+  }
+}
+
+// Prints the summary; returns the exit code.
+export fn t_done(name: string) -> int32 {
+  if (g_fails > 0) {
+    println("{name}: {g_fails} of {g_checks} checks failed");
+    return 1;
+  }
+  println("{name}: {g_checks} checks passed");
+  return 0;
+}
+
+// Reads a whole file into a new malloc block; empty on failure.
+export fn t_read_file(path: string) -> string {
+  var out: string;
+  var fd: int64 = file_open(path, FILE_READ);
+  if (fd < 0) {
+    println("cannot open {path}");
+    return out;
+  }
+  var n: int64 = file_size(fd);
+  var p: uint8* = (uint8*)malloc(n + 1);
+  var got: int64 = 0;
+  while (got < n) {
+    var k: int64 = file_read_at(fd, p + got, n - got, got);
+    if (k <= 0) { break; }
+    got = got + k;
+  }
+  file_close(fd);
+  p[got] = (uint8)0;
+  out.chars = p;
+  out.length = (uint64)got;
+  return out;
+}
+
+fn t_nib(c: int32) -> int32 {
+  if (c >= 97) { return c - 87; }
+  if (c >= 65) { return c - 55; }
+  return c - 48;
+}
+
+// Hex text to bytes in a new malloc block.
+export fn t_unhex(h: string) -> string {
+  var n: int64 = (int64)h.length / 2;
+  var p: uint8* = (uint8*)malloc(n + 1);
+  for i in 0..n {
+    p[i] = (uint8)(t_nib((int32)h.chars[i * 2]) * 16 + t_nib((int32)h.chars[i * 2 + 1]));
+  }
+  var out: string;
+  out.chars = p;
+  out.length = (uint64)n;
+  return out;
+}
+
+// Splits text at byte `sep`, returning the next piece and moving *pos past it.
+export fn t_field(s: string, pos: int64*, sep: int32) -> string {
+  var start: int64 = *pos;
+  var i: int64 = start;
+  while (i < (int64)s.length && (int32)s.chars[i] != sep) { i = i + 1; }
+  var out: string;
+  out.chars = s.chars + start;
+  out.length = (uint64)(i - start);
+  *pos = i + 1;
+  return out;
+}
