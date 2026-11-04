@@ -10,6 +10,7 @@ fn project() {
   mb_meta("license", "Apache-2.0");
   mb_meta("repository", "https://github.com/Lex-Dellimere/Codec");
   mb_import_root("src");
+  mb_bin("floatdump", "tools/floatdump/main.mettle");
 }
 
 fn deps() {

@@ -1,0 +1,163 @@
+// JSON writer: escaping, numbers, nesting, pretty output and misuse.
+import "codec/codec";
+import "tutil";
+import "std/mem";
+
+fn expect(name: string, w: CodecJson*, b: CodecBuf*, want: string) {
+  var err: int32 = codec_json_finish(w);
+  var got: string = codec_buf_view(b);
+  t_ok(name + ": got " + got, err == CODEC_OK && got == want);
+}
+
+fn start(w: CodecJson*, b: CodecBuf*, flags: int32) {
+  codec_buf_clear(b);
+  codec_json_init_flags(w, b, flags);
+}
+
+fn one_float(b: CodecBuf*, v: float64) -> string {
+  var w: CodecJson;
+  start(&w, b, 0);
+  codec_json_float(&w, v);
+  return codec_buf_view(b);
+}
+
+fn main() -> int32 {
+  var b: CodecBuf;
+  codec_buf_init(&b, 16);
+  var w: CodecJson;
+
+  start(&w, &b, 0);
+  codec_json_object(&w);
+  codec_json_field_int(&w, "id", 7);
+  codec_json_key(&w, "tags");
+  codec_json_array(&w);
+  codec_json_string(&w, "a");
+  codec_json_bool(&w, true);
+  codec_json_null(&w);
+  codec_json_object(&w);
+  codec_json_end(&w);
+  codec_json_array(&w);
+  codec_json_end(&w);
+  codec_json_end(&w);
+  codec_json_field_float(&w, "x", 0.5);
+  codec_json_end(&w);
+  expect("nested", &w, &b, "{{\"id\":7,\"tags\":[\"a\",true,null,{{},[]],\"x\":0.5}");
+
+  start(&w, &b, 0);
+  codec_json_pretty(&w, 2);
+  codec_json_object(&w);
+  codec_json_field_int(&w, "a", 1);
+  codec_json_key(&w, "b");
+  codec_json_array(&w);
+  codec_json_int(&w, 2);
+  codec_json_int(&w, 3);
+  codec_json_end(&w);
+  codec_json_key(&w, "c");
+  codec_json_object(&w);
+  codec_json_end(&w);
+  codec_json_end(&w);
+  expect("pretty", &w, &b, "{{\n  \"a\": 1,\n  \"b\": [\n    2,\n    3\n  ],\n  \"c\": {{}\n}");
+
+  // Escapes: quote, backslash, controls, DEL (not escaped), UTF-8 kept.
+  var raw: uint8[12] = [34, 92, 10, 9, 1, 31, 127, 47, 0xc3, 0xa9, 8, 12];
+  var rs: string;
+  rs.chars = &raw[0];
+  rs.length = (uint64)12;
+  start(&w, &b, 0);
+  codec_json_string(&w, rs);
+  t_ok("escapes finish", codec_json_finish(&w) == CODEC_OK);
+  t_bytes("escapes", codec_buf_view(&b), "225c225c5c5c6e5c745c75303030315c75303031667f2fc3a95c625c6622");
+
+  start(&w, &b, CODEC_JSON_ASCII | CODEC_JSON_ESCAPE_SLASH);
+  codec_json_string(&w, "é/😀");
+  expect("ascii", &w, &b, "\"\\u00e9\\/\\ud83d\\ude00\"");
+
+  // A long plain string goes through the 8-byte path; a quote at the end.
+  start(&w, &b, 0);
+  codec_json_string(&w, "abcdefghijklmnopqrstuvwxyz0123456789\"");
+  expect("long", &w, &b, "\"abcdefghijklmnopqrstuvwxyz0123456789\\\"\"");
+
+  // Invalid UTF-8: error by default, U+FFFD with the lossy flag.
+  var bad: uint8[4] = [97, 0xff, 0xc0, 98];
+  start(&w, &b, 0);
+  codec_json_bytes_as_string(&w, &bad[0], 4);
+  t_eq("bad utf8", (int64)codec_json_finish(&w), (int64)CODEC_ERR_UTF8);
+  start(&w, &b, CODEC_JSON_LOSSY_UTF8);
+  codec_json_bytes_as_string(&w, &bad[0], 4);
+  t_ok("lossy finish", codec_json_finish(&w) == CODEC_OK);
+  t_bytes("lossy", codec_buf_view(&b), "2261efbfbdefbfbd6222");
+
+  // Integers.
+  start(&w, &b, 0);
+  codec_json_array(&w);
+  codec_json_int(&w, 0);
+  codec_json_int(&w, -9223372036854775807 - 1);
+  codec_json_uint(&w, 0xffffffffffffffff);
+  codec_json_int(&w, 1000000);
+  codec_json_end(&w);
+  expect("ints", &w, &b, "[0,-9223372036854775808,18446744073709551615,1000000]");
+
+  // Floats, laid out as JavaScript prints them.
+  t_ok("f 1", one_float(&b, 1.0) == "1");
+  t_ok("f -0", one_float(&b, -0.0) == "-0");
+  t_ok("f 0.1", one_float(&b, 0.1) == "0.1");
+  t_ok("f 1/3", one_float(&b, 1.0 / 3.0) == "0.3333333333333333");
+  t_ok("f 1e21", one_float(&b, 1e21) == "1e+21");
+  t_ok("f 1e20", one_float(&b, 1e20) == "100000000000000000000");
+  t_ok("f 1e-7", one_float(&b, 1e-7) == "1e-7");
+  t_ok("f 1.5e-7", one_float(&b, 1.5e-7) == "1.5e-7");
+  t_ok("f 0.000001", one_float(&b, 0.000001) == "0.000001");
+  t_ok("f max", one_float(&b, 1.7976931348623157e308) == "1.7976931348623157e+308");
+  t_ok("f min sub", one_float(&b, 5e-324) == "5e-324");
+  t_ok("f 123.456", one_float(&b, 123.456) == "123.456");
+  var nan: float64 = codec_bits_f64(0x7ff8000000000000);
+  t_ok("f nan", one_float(&b, nan) == "null");
+  start(&w, &b, CODEC_JSON_NAN_ERROR);
+  codec_json_float(&w, nan);
+  t_eq("nan error", (int64)codec_json_finish(&w), (int64)CODEC_ERR_INVALID);
+  start(&w, &b, 0);
+  codec_json_float32(&w, (float32)0.1);
+  expect("f32 0.1", &w, &b, "0.1");
+  start(&w, &b, 0);
+  codec_json_float32(&w, (float32)16777216.0);
+  expect("f32 2^24", &w, &b, "16777216");
+
+  // Misuse.
+  start(&w, &b, 0);
+  codec_json_object(&w);
+  codec_json_int(&w, 1);
+  t_eq("value without key", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  codec_json_array(&w);
+  codec_json_key(&w, "k");
+  t_eq("key in array", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  codec_json_object(&w);
+  t_eq("unclosed", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  codec_json_end(&w);
+  t_eq("end with nothing open", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  codec_json_int(&w, 1);
+  codec_json_int(&w, 2);
+  t_eq("two top values", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  codec_json_object(&w);
+  codec_json_key(&w, "k");
+  codec_json_end(&w);
+  t_eq("key without value", (int64)codec_json_finish(&w), (int64)CODEC_ERR_STATE);
+  start(&w, &b, 0);
+  for i in 0..300 { codec_json_array(&w); }
+  t_eq("depth", (int64)codec_json_finish(&w), (int64)CODEC_ERR_DEPTH);
+
+  // A fixed buffer that is too small.
+  var small: uint8[8];
+  var fb: CodecBuf;
+  codec_buf_fixed(&fb, &small[0], 8);
+  codec_json_init(&w, &fb);
+  codec_json_string(&w, "far too long for eight bytes");
+  t_eq("fixed too small", (int64)codec_json_finish(&w), (int64)CODEC_ERR_LIMIT);
+
+  codec_buf_free(&b);
+  return t_done("json");
+}

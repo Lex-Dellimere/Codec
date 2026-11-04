@@ -1,0 +1,39 @@
+// Reads float bit patterns (hex, one per line) on stdin and prints each one
+// formatted, for tools/float_check.py. A line starting with "s" is a float32.
+import "codec/json/float";
+import "std/io";
+import "std/mem";
+
+fn hexval(s: string, start: int64) -> uint64 {
+  var v: uint64 = 0;
+  var i: int64 = start;
+  while (i < (int64)s.length) {
+    var c: int32 = (int32)s.chars[i];
+    var d: int32 = c - 48;
+    if (c >= 97) { d = c - 87; }
+    if (c < 48) { break; }
+    v = (v << 4) | (uint64)d;
+    i = i + 1;
+  }
+  return v;
+}
+
+fn main() -> int32 {
+  var line: uint8[64];
+  var out: uint8[40];
+  while (true) {
+    var s: string = read_line_stdin((cstring)&line[0], 64);
+    if (s.length == 0) { break; }
+    var n: int32 = 0;
+    if (s.chars[0] == 115) {
+      var b32: uint32 = (uint32)hexval(s, 1);
+      n = codec_format_f32(*(float32*)&b32, &out[0]);
+    } else {
+      var b64: uint64 = hexval(s, 0);
+      n = codec_format_f64(*(float64*)&b64, &out[0]);
+    }
+    out[n] = (uint8)0;
+    println_cstr((cstring)&out[0]);
+  }
+  return 0;
+}
